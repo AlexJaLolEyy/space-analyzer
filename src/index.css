@@ -1,0 +1,108 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+:root {
+  /* Warm cream/ivory light mode — never plain white */
+  --background: hsl(36 33% 96%);
+  --foreground: hsl(224 35% 14%);
+  --card: hsl(36 28% 98%);
+  --card-foreground: hsl(224 35% 14%);
+  --popover: hsl(36 28% 98%);
+  --popover-foreground: hsl(224 35% 14%);
+  --primary: hsl(220 70% 52%);
+  --primary-foreground: hsl(210 20% 98%);
+  --secondary: hsl(36 20% 91%);
+  --secondary-foreground: hsl(224 35% 20%);
+  --muted: hsl(36 20% 91%);
+  --muted-foreground: hsl(224 15% 46%);
+  --accent: hsl(220 60% 92%);
+  --accent-foreground: hsl(220 70% 35%);
+  --destructive: hsl(0 84.2% 60.2%);
+  --destructive-foreground: hsl(210 20% 98%);
+  --border: hsl(36 16% 85%);
+  --input: hsl(36 16% 85%);
+  --ring: hsl(221.2 83.2% 53.3%);
+  --radius: 0.75rem;
+
+  /* Glassmorphism tokens - Light */
+  --glass-bg: rgba(255, 253, 247, 0.55);
+  --glass-border: rgba(200, 185, 155, 0.25);
+  --glass-shadow: 0 8px 32px 0 rgba(80, 80, 120, 0.08);
+}
+
+.dark {
+  /* Rich deep-navy dark mode — never solid black */
+  --background: hsl(226 30% 10%);
+  --foreground: hsl(210 25% 94%);
+  --card: hsl(226 28% 13%);
+  --card-foreground: hsl(210 25% 94%);
+  --popover: hsl(226 28% 13%);
+  --popover-foreground: hsl(210 25% 94%);
+  --primary: hsl(217.2 91.2% 62%);
+  --primary-foreground: hsl(222.2 47.4% 11.2%);
+  --secondary: hsl(220 26% 18%);
+  --secondary-foreground: hsl(210 25% 92%);
+  --muted: hsl(220 26% 18%);
+  --muted-foreground: hsl(215 20% 62%);
+  --accent: hsl(220 40% 22%);
+  --accent-foreground: hsl(210 25% 94%);
+  --destructive: hsl(0 55% 42%);
+  --destructive-foreground: hsl(210 20% 98%);
+  --border: hsl(220 22% 22%);
+  --input: hsl(220 22% 22%);
+  --ring: hsl(224 76% 55%);
+
+  /* Glassmorphism tokens - Dark */
+  --glass-bg: rgba(22, 26, 42, 0.55);
+  --glass-border: rgba(100, 120, 200, 0.12);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+@layer components {
+  .glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(16px) saturate(180%);
+    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+}
