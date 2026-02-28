@@ -3,7 +3,7 @@ use sysinfo::Disks;
 
 #[tauri::command]
 pub fn list_drives() -> Vec<DriveInfo> {
-    let mut disks = Disks::new_with_refreshed_list();
+    let disks = Disks::new_with_refreshed_list();
     let mut drives = Vec::new();
 
     for disk in disks.list() {

@@ -1,6 +1,5 @@
-import { motion } from "framer-motion";
+import { motion, Variants } from "framer-motion";
 import { HardDrive } from "lucide-react";
-import { useState } from "react";
 import { useDrives } from "../../hooks/useDrives";
 import type { DriveInfo } from "../../types/drive";
 import { DriveCard } from "./DriveCard";
@@ -9,19 +8,18 @@ interface DriveSelectorProps {
     onDriveSelected: (drive: DriveInfo) => void;
 }
 
-const containerVariants = {
+const containerVariants: Variants = {
     hidden: {},
     visible: { transition: { staggerChildren: 0.07 } },
 };
 
-const cardVariants = {
+const cardVariants: Variants = {
     hidden: { opacity: 0, y: 24 },
     visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
 };
 
 export function DriveSelector({ onDriveSelected }: DriveSelectorProps) {
     const { drives, isLoading, error } = useDrives();
-    const [hoveredPath, setHoveredPath] = useState<string | null>(null);
 
     if (isLoading) {
         return (
@@ -87,8 +85,6 @@ export function DriveSelector({ onDriveSelected }: DriveSelectorProps) {
                         <motion.div
                             key={drive.mount_point}
                             variants={cardVariants}
-                            onHoverStart={() => setHoveredPath(drive.mount_point)}
-                            onHoverEnd={() => setHoveredPath(null)}
                         >
                             <DriveCard
                                 drive={drive}

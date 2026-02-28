@@ -65,8 +65,12 @@ pub fn scan_directory(
             }
             children.retain(|dir_entry_result| {
                 if let Ok(dir_entry) = dir_entry_result {
-                    let name = dir_entry.file_name().to_string_lossy().to_string();
-                    !excludes.contains(&name.as_str())
+                    // Efficiently check exclusions without multiple allocations
+                    let os_name = dir_entry.file_name();
+
+                    // Simple check for common exclusions
+                    let name_str = os_name.to_string_lossy();
+                    !excludes.contains(&name_str.as_ref())
                 } else {
                     false
                 }
@@ -79,91 +83,103 @@ pub fn scan_directory(
         }
 
         if let Ok(dir_entry) = entry {
-            let metadata = match dir_entry.metadata() {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
+            let file_type = dir_entry.file_type;
 
             // Skip symbolic links to avoid loops
-            if dir_entry.file_type.is_symlink() {
+            if file_type.is_symlink() {
                 continue;
             }
 
             let file_path = dir_entry.path();
+            let is_dir = file_type.is_dir();
 
-            let name = file_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_default();
+            // Determine size and metadata ONLY if needed
+            let mut size = 0;
+            let mut last_modified = None;
 
-            let is_dir = dir_entry.file_type.is_dir();
-            let size = if is_dir { 0 } else { metadata.len() };
-
-            let last_modified = metadata
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
-
-            let category = if !is_dir {
-                if let Some(ext) = file_path.extension() {
-                    categorize_file(&ext.to_string_lossy())
+            if !is_dir {
+                if let Ok(m) = dir_entry.metadata() {
+                    size = m.len();
+                    last_modified = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs());
                 } else {
-                    FileCategory::Other
+                    continue;
                 }
-            } else {
-                FileCategory::Other
-            };
+            }
 
             if !is_dir {
                 files_scanned += 1;
                 bytes_scanned += size;
             }
 
-            // DEV LIMIT: Cap at 20GB so development testing is fast (only applies in debug builds)
+            // DEV LIMIT: Cap at 500GB/1M files for faster testing if needed
             #[cfg(debug_assertions)]
-            if bytes_scanned > 20_000_000_000 || files_scanned > 100_000 {
+            if bytes_scanned > 500_000_000_000 || files_scanned > 1_000_000 {
                 break;
             }
-
-            let node = ScanNode {
-                name: name.clone(),
-                path: file_path.to_string_lossy().to_string(),
-                size,
-                is_dir,
-                children: Vec::new(),
-                file_count: if is_dir { 0 } else { 1 },
-                category,
-                last_modified,
-            };
 
             if is_dir {
                 // Ignore root to avoid overwriting the pre-initialized path matching
                 if file_path != PathBuf::from(&path) {
+                    let name = file_path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+
+                    let node = ScanNode {
+                        name,
+                        path: file_path.to_string_lossy().to_string(),
+                        size: 0,
+                        is_dir: true,
+                        children: Vec::with_capacity(16),
+                        file_count: 0,
+                        category: FileCategory::Other,
+                        last_modified,
+                    };
                     nodes_map.insert(file_path.clone(), node);
                 }
             } else {
                 // For files, directly insert into parent dir's children if possible
                 if let Some(parent_path) = file_path.parent() {
                     if let Some(parent_node) = nodes_map.get_mut(parent_path) {
-                        // Aggregate size & file count immediately
                         parent_node.size += size;
                         parent_node.file_count += 1;
 
                         // CULLING OPTIMIZATION:
-                        // Do not send native files smaller than 1MB to the UI to avoid
-                        // crashing the WebView's V8 JSON parser with gigabytes of stringified data.
-                        // The size is still perfectly accounted for in the parent directory!
+                        // Only create ScanNode and categorize for files > 1MB
                         if size > 1_048_576 {
-                            // 1MB threshold
+                            let category = if let Some(ext) = file_path.extension() {
+                                categorize_file(&ext.to_string_lossy())
+                            } else {
+                                FileCategory::Other
+                            };
+
+                            let name = file_path
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+
+                            let node = ScanNode {
+                                name,
+                                path: file_path.to_string_lossy().to_string(),
+                                size,
+                                is_dir: false,
+                                children: Vec::new(),
+                                file_count: 1,
+                                category,
+                                last_modified,
+                            };
                             parent_node.children.push(node);
                         }
                     }
                 }
             }
 
-            // Limit emissions to keep frontend from hanging
-            if last_emit.elapsed().as_millis() > 200 {
+            // Limit emissions (300ms + file count threshold)
+            if (files_scanned % 5000 == 0 || is_dir) && last_emit.elapsed().as_millis() > 300 {
                 last_emit = Instant::now();
                 let _ = app_handle.emit(
                     "scan-progress",
