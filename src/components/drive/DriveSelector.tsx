@@ -107,9 +107,15 @@ export function DriveSelector({ onDriveSelected }: DriveSelectorProps) {
                     initial={{ opacity: 0 }}
                     animate={{ opacity: 1 }}
                     transition={{ delay: 0.6 }}
-                    className="text-center text-xs text-muted-foreground/60"
+                    className="flex flex-col items-center gap-2"
                 >
-                    Click on a drive card to begin scanning
+                    <p className="text-center text-xs text-muted-foreground/60">
+                        Click on a drive card to begin scanning
+                    </p>
+                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/5 border border-primary/10 text-[10px] text-primary/70 font-medium">
+                        <span className="w-1 h-1 rounded-full bg-primary animate-pulse" />
+                        Turbo Mode available: Run as Administrator for 50x faster NTFS scanning
+                    </div>
                 </motion.div>
             </div>
         </motion.div>
