@@ -148,32 +148,28 @@ pub fn scan_directory(
                         parent_node.size += size;
                         parent_node.file_count += 1;
 
-                        // CULLING OPTIMIZATION:
-                        // Only create ScanNode and categorize for files > 1MB
-                        if size > 1_048_576 {
-                            let category = if let Some(ext) = file_path.extension() {
-                                categorize_file(&ext.to_string_lossy())
-                            } else {
-                                FileCategory::Other
-                            };
+                        let category = if let Some(ext) = file_path.extension() {
+                            categorize_file(&ext.to_string_lossy())
+                        } else {
+                            FileCategory::Other
+                        };
 
-                            let name = file_path
-                                .file_name()
-                                .map(|n| n.to_string_lossy().to_string())
-                                .unwrap_or_default();
+                        let name = file_path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_string())
+                            .unwrap_or_default();
 
-                            let node = ScanNode {
-                                name,
-                                path: file_path.to_string_lossy().to_string(),
-                                size,
-                                is_dir: false,
-                                children: Vec::new(),
-                                file_count: 1,
-                                category,
-                                last_modified,
-                            };
-                            parent_node.children.push(node);
-                        }
+                        let node = ScanNode {
+                            name,
+                            path: file_path.to_string_lossy().to_string(),
+                            size,
+                            is_dir: false,
+                            children: Vec::new(),
+                            file_count: 1,
+                            category,
+                            last_modified,
+                        };
+                        parent_node.children.push(node);
                     }
                 }
             }
