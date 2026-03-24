@@ -1,6 +1,6 @@
-import { useMemo } from "react";
+import { useState, useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
-import { getCategoryColor } from "../../lib/colors";
+import { getCategoryColor, getDirColor } from "../../lib/colors";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
@@ -9,23 +9,9 @@ interface PieChartViewProps {
     node: ScanNode;
 }
 
-// Vibrant palette for directories (index-based when category is "Other"/dir)
-const DIR_COLORS = [
-    "hsl(220, 80%, 60%)",
-    "hsl(280, 75%, 62%)",
-    "hsl(150, 65%, 48%)",
-    "hsl(30, 90%, 58%)",
-    "hsl(340, 75%, 58%)",
-    "hsl(180, 70%, 48%)",
-    "hsl(45, 90%, 52%)",
-    "hsl(0, 70%, 58%)",
-    "hsl(250, 65%, 65%)",
-    "hsl(100, 65%, 48%)",
-    "hsl(200, 70%, 52%)",
-];
-
 export function PieChartView({ node }: PieChartViewProps) {
     const { currentPath, setCurrentPath } = useScanStore();
+    const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined);
 
     const data = useMemo(() => {
         const sorted = [...node.children].sort((a, b) => b.size - a.size);
@@ -49,7 +35,7 @@ export function PieChartView({ node }: PieChartViewProps) {
     }, [node.children]);
 
     const getColor = (entry: ScanNode, index: number) => {
-        if (entry.is_dir) return DIR_COLORS[index % DIR_COLORS.length];
+        if (entry.is_dir) return getDirColor(index);
         return getCategoryColor(entry.category);
     };
 
@@ -79,7 +65,7 @@ export function PieChartView({ node }: PieChartViewProps) {
 
     // Custom label rendered outside the donut
     const renderCustomLabel = ({ cx, cy, midAngle, outerRadius, name, percent }: any) => {
-        if (percent < 0.04) return null; // skip tiny slices
+        if (percent < 0.02) return null; // skip tiny slices (Phase 5: < 2%)
         const RADIAN = Math.PI / 180;
         const radius = outerRadius + 28;
         const x = cx + radius * Math.cos(-midAngle * RADIAN);
@@ -117,6 +103,8 @@ export function PieChartView({ node }: PieChartViewProps) {
                             outerRadius="68%"
                             paddingAngle={2}
                             onClick={(_: any, index: number) => handleClick(data[index])}
+                            onMouseEnter={(_, index) => setActiveIndex(index)}
+                            onMouseLeave={() => setActiveIndex(undefined)}
                             label={renderCustomLabel}
                             labelLine={false}
                             className="cursor-pointer focus:outline-none"
@@ -126,7 +114,12 @@ export function PieChartView({ node }: PieChartViewProps) {
                                     key={`cell-${index}`}
                                     fill={getColor(entry, index)}
                                     stroke="transparent"
-                                    className="hover:opacity-80 transition-opacity"
+                                    className="transition-all duration-300 outline-none"
+                                    style={{
+                                        filter: activeIndex === index ? "brightness(1.1) drop-shadow(0px 4px 8px rgba(0,0,0,0.15))" : "none",
+                                        transform: activeIndex === index ? "scale(1.02)" : "scale(1)",
+                                        transformOrigin: "center"
+                                    }}
                                 />
                             ))}
                         </Pie>
@@ -145,7 +138,9 @@ export function PieChartView({ node }: PieChartViewProps) {
                         <button
                             key={`legend-${index}`}
                             onClick={() => handleClick(entry)}
-                            className={`flex items-center gap-2 text-left px-2 py-1.5 rounded-md transition-colors ${entry.is_dir && entry.name !== "Other" ? "hover:bg-muted cursor-pointer" : "cursor-default"}`}
+                            onMouseEnter={() => setActiveIndex(index)}
+                            onMouseLeave={() => setActiveIndex(undefined)}
+                            className={`flex items-center gap-2 text-left px-2 py-1.5 rounded-md transition-colors ${entry.is_dir && entry.name !== "Other" ? "hover:bg-muted cursor-pointer" : "cursor-default"} ${activeIndex === index ? "bg-muted shadow-sm" : ""}`}
                         >
                             <span
                                 className="w-2.5 h-2.5 rounded-full shrink-0"

@@ -1,6 +1,6 @@
 import { ChevronLeft } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { getCategoryColor } from "../../lib/colors";
+import { getCategoryColor, getDirColor } from "../../lib/colors";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
@@ -17,22 +17,6 @@ interface Rect {
     node: ScanNode;
     color: string;
 }
-
-// Vibrant index-based colors for directories
-const DIR_COLORS = [
-    "hsl(220, 80%, 58%)",
-    "hsl(280, 75%, 60%)",
-    "hsl(150, 65%, 46%)",
-    "hsl(30, 90%, 56%)",
-    "hsl(340, 75%, 58%)",
-    "hsl(180, 70%, 48%)",
-    "hsl(45, 90%, 52%)",
-    "hsl(0, 72%, 58%)",
-    "hsl(250, 65%, 65%)",
-    "hsl(100, 60%, 46%)",
-    "hsl(200, 70%, 52%)",
-    "hsl(320, 68%, 58%)",
-];
 
 const layoutTreemap = (
     nodes: ScanNode[],
@@ -90,7 +74,7 @@ export function TreemapView({ node }: TreemapViewProps) {
         const sorted = [...node.children].sort((a, b) => b.size - a.size);
         sorted.forEach((child, index) => {
             if (child.is_dir) {
-                newMap.set(child.name, DIR_COLORS[index % DIR_COLORS.length]);
+                newMap.set(child.name, getDirColor(index));
             } else {
                 newMap.set(child.name, getCategoryColor(child.category));
             }
@@ -115,16 +99,33 @@ export function TreemapView({ node }: TreemapViewProps) {
             const rects = layoutTreemap(node.children, totalSize, 0, 0, w, h, colorMap.current);
             rectsRef.current = rects;
 
+            const hovered = hoverNode;
+
             for (const r of rects) {
                 // Fill
-                ctx.fillStyle = r.color;
+                const isHovered = hovered && hovered.name === r.node.name && hovered.size === r.node.size;
+
+                if (isHovered) {
+                    ctx.fillStyle = r.color;
+                    ctx.globalAlpha = 0.9; // Slight brightness shift or transparency change
+                } else {
+                    ctx.fillStyle = r.color;
+                    ctx.globalAlpha = 1.0;
+                }
+
                 ctx.beginPath();
                 ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4);
                 ctx.fill();
+                ctx.globalAlpha = 1.0;
 
-                // Subtle inner border
-                ctx.strokeStyle = "rgba(0,0,0,0.15)";
-                ctx.lineWidth = 1;
+                // Subtle inner border or glow
+                if (isHovered) {
+                    ctx.strokeStyle = "rgba(255,255,255,0.5)";
+                    ctx.lineWidth = 2;
+                } else {
+                    ctx.strokeStyle = "rgba(0,0,0,0.15)";
+                    ctx.lineWidth = 1;
+                }
                 ctx.stroke();
 
                 // Draw text if enough space
@@ -164,8 +165,13 @@ export function TreemapView({ node }: TreemapViewProps) {
 
         const observer = new ResizeObserver(resize);
         observer.observe(container);
+
+        // Initial draw in case dimensions exist
+        const rect = container.getBoundingClientRect();
+        if (rect.width && rect.height) resize();
+
         return () => observer.disconnect();
-    }, [node]);
+    }, [node, hoverNode]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
         const rect = canvasRef.current?.getBoundingClientRect();

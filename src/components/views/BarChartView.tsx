@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getCategoryColor } from "../../lib/colors";
+import { getCategoryColor, getDirColor } from "../../lib/colors";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
@@ -8,30 +8,6 @@ import type { ScanNode } from "../../types/scan";
 interface BarChartViewProps {
     node: ScanNode;
 }
-
-// Vibrant index-based palette for directory items
-const DIR_COLORS = [
-    "hsl(220, 80%, 60%)",
-    "hsl(280, 75%, 62%)",
-    "hsl(150, 65%, 48%)",
-    "hsl(30, 90%, 58%)",
-    "hsl(340, 75%, 58%)",
-    "hsl(180, 70%, 48%)",
-    "hsl(45, 90%, 52%)",
-    "hsl(0, 70%, 58%)",
-    "hsl(250, 65%, 65%)",
-    "hsl(100, 65%, 48%)",
-    "hsl(200, 70%, 52%)",
-    "hsl(320, 70%, 58%)",
-    "hsl(60, 85%, 50%)",
-    "hsl(170, 65%, 50%)",
-    "hsl(10, 80%, 60%)",
-    "hsl(260, 70%, 62%)",
-    "hsl(130, 65%, 46%)",
-    "hsl(50, 90%, 55%)",
-    "hsl(190, 70%, 50%)",
-    "hsl(350, 75%, 58%)",
-];
 
 export function BarChartView({ node }: BarChartViewProps) {
     const { currentPath, setCurrentPath } = useScanStore();
@@ -42,7 +18,7 @@ export function BarChartView({ node }: BarChartViewProps) {
     }, [node.children]);
 
     const getColor = (entry: ScanNode, index: number) => {
-        if (entry.is_dir) return DIR_COLORS[index % DIR_COLORS.length];
+        if (entry.is_dir) return getDirColor(index);
         return getCategoryColor(entry.category);
     };
 
@@ -99,6 +75,7 @@ export function BarChartView({ node }: BarChartViewProps) {
                             <Cell
                                 key={`cell-${index}`}
                                 fill={getColor(entry, index)}
+                                className={entry.is_dir ? "cursor-pointer hover:brightness-110 drop-shadow-sm transition-all duration-200" : "hover:brightness-110 drop-shadow-sm transition-all duration-200"}
                             />
                         ))}
                     </Bar>
