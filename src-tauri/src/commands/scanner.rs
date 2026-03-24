@@ -28,13 +28,17 @@ pub async fn start_scan(
         // Attempt NTFS MFT scan if it's a root drive and we're on Windows
         #[cfg(target_os = "windows")]
         if path.len() <= 3 && path.contains(':') {
-            println!("Attempting high-speed MFT scan for {}", path);
-            if let Ok(res) =
-                crate::utils::mft_scanner::scan_ntfs_mft(&app, &path, cancel_flag.clone())
-            {
-                return res;
+            if crate::utils::is_admin() {
+                println!("Attempting high-speed MFT scan for {}", path);
+                if let Ok(res) =
+                    crate::utils::mft_scanner::scan_ntfs_mft(&app, &path, cancel_flag.clone())
+                {
+                    return res;
+                }
+                println!("MFT scan failed, falling back to standard walker");
+            } else {
+                println!("[WARNING] Not running as administrator. MFT Turbo Mode is disabled. Speed will be limited.");
             }
-            println!("MFT scan failed or not supported, falling back to standard walker");
         }
 
         scan_directory(&app, path, cancel_flag)
