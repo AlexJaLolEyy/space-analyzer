@@ -57,7 +57,7 @@ export function TopFilesPanel({ onClose }: TopFilesPanelProps) {
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: "100%", opacity: 0 }}
             transition={{ type: "spring", damping: 28, stiffness: 260 }}
-            className="fixed top-0 right-0 h-full w-96 z-50 flex flex-col glass shadow-2xl border-l border-border"
+            className="fixed top-0 right-0 h-full w-96 z-50 flex flex-col glass-strong shadow-2xl border-l border-border"
         >
             {/* Header */}
             <div className="flex items-center justify-between px-4 py-3 border-b border-border/60 shrink-0">

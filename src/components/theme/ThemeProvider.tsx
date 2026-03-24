@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from "react"
+import { useSettingsStore } from "../../stores/settingsStore"
 
 type Theme = "dark" | "light" | "system"
 
@@ -29,24 +30,32 @@ export function ThemeProvider({
     const [theme, setTheme] = useState<Theme>(
         () => (localStorage.getItem(storageKey) as Theme) || defaultTheme
     )
+    const accentColor = useSettingsStore((s) => s.accentColor)
 
+    // Apply theme class
     useEffect(() => {
         const root = window.document.documentElement
-
         root.classList.remove("light", "dark")
 
         if (theme === "system") {
-            const systemTheme = window.matchMedia("(prefers-color-scheme: dark)")
-                .matches
+            const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
                 ? "dark"
                 : "light"
-
             root.classList.add(systemTheme)
             return
         }
 
         root.classList.add(theme)
     }, [theme])
+
+    // Apply accent color class
+    useEffect(() => {
+        const root = window.document.documentElement
+        root.classList.remove("accent-blue", "accent-purple", "accent-emerald", "accent-amber", "accent-rose")
+        if (accentColor !== "blue") {
+            root.classList.add(`accent-${accentColor}`)
+        }
+    }, [accentColor])
 
     const value = {
         theme,
@@ -65,9 +74,7 @@ export function ThemeProvider({
 
 export const useTheme = () => {
     const context = useContext(ThemeProviderContext)
-
     if (context === undefined)
         throw new Error("useTheme must be used within a ThemeProvider")
-
     return context
 }
