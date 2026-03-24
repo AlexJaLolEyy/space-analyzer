@@ -209,10 +209,23 @@ pub fn scan_directory(
                 parent_node.size += node.size;
                 parent_node.file_count += node.file_count;
 
-                // Optional: we can sort the node's children here to keep the structure clean
+                // Sort children by size for cleaner structure
                 node.children.sort_by(|a, b| b.size.cmp(&a.size));
 
-                parent_node.children.push(node);
+                // Culling for IPC performance: Drop small files/dirs from IPC payload
+                // but keep their sizes in parent_node above.
+                const CULL_LIMIT_FILE: u64 = 10 * 1024 * 1024; // 10MB for files
+                const CULL_LIMIT_DIR: u64 = 50 * 1024 * 1024; // 50MB for directories
+
+                let keep = if node.is_dir {
+                    node.size >= CULL_LIMIT_DIR
+                } else {
+                    node.size >= CULL_LIMIT_FILE
+                };
+
+                if keep {
+                    parent_node.children.push(node);
+                }
             }
         }
     }

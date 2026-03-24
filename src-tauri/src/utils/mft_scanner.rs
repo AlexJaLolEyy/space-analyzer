@@ -120,24 +120,33 @@ pub fn scan_ntfs_mft(
         };
 
     // --- Phase 4: Build ScanNode tree ---
-    let tree = build_scan_tree(drive_mount, &entries_with_info, &entries);
+    let tree = build_scan_tree(
+        drive_mount,
+        &entries_with_info,
+        &entries,
+        app_handle,
+        start_time,
+        &cancel_flag,
+    );
 
     unsafe {
         CloseHandle(volume_handle);
     }
 
-    if tree.size == 0 && count_items(&tree) < 50 {
+    if tree.size == 0 || (count_items(&tree) < 10 && tree.file_count > 1000) {
         println!(
-            "Warning: MFT scan produced insufficient data (Size: {}), falling back.",
-            tree.size
+            "Warning: MFT tree seems broken (Size: {}, Items: {}), falling back.",
+            tree.size,
+            count_items(&tree)
         );
-        return Err("MFT scan returned no data".to_string());
+        return Err("MFT scan produced invalid tree".to_string());
     }
 
     println!(
-        "Scan finished successfully in {:.2}s. Root size: {:.2} TB",
+        "Scan finished successfully in {:.2}s. Root size: {} ({} files in tree)",
         start_time.elapsed().as_secs_f64(),
-        tree.size as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0)
+        format_bytes(tree.size),
+        tree.file_count
     );
     Ok(tree)
 }
@@ -313,9 +322,17 @@ fn get_file_info(
     start_time: Instant,
 ) -> Result<Vec<Option<(String, u64, u64, bool)>>, String> {
     let drive_prefix = drive_mount.trim_end_matches('\\');
-    let mut children_map: Vec<Vec<u64>> = vec![Vec::new(); entries.len()];
-    let root_ref: u64 = 5;
+    let mut root_ref: u64 = 5;
+    for (id, entry_opt) in entries.iter().enumerate() {
+        if let Some(entry) = entry_opt {
+            if entry.parent_ref == id as u64 && id > 0 {
+                root_ref = id as u64;
+                break;
+            }
+        }
+    }
 
+    let mut children_map: Vec<Vec<u64>> = vec![Vec::new(); entries.len()];
     for (id, entry_opt) in entries.iter().enumerate() {
         if let Some(entry) = entry_opt {
             let id = id as u64;
@@ -336,25 +353,29 @@ fn get_file_info(
     queue.push_back(root_ref);
 
     println!("Phase 2: Resolving paths...");
+    let mut resolved_count = 0;
     while let Some(id) = queue.pop_front() {
-        let children = &children_map[id as usize];
-        if !children.is_empty() {
-            let parent_path = path_map[id as usize].as_ref().unwrap().clone();
-            for &child_id in children {
-                if let Some(Some(child_entry)) = entries.get(child_id as usize) {
-                    let child_path = format!(
-                        "{}\\{}",
-                        parent_path.trim_end_matches('\\'),
-                        child_entry.name
-                    );
-                    path_map[child_id as usize] = Some(child_path);
-                    if child_entry.is_dir {
-                        queue.push_back(child_id);
+        if let Some(children) = children_map.get(id as usize) {
+            if let Some(parent_path) = path_map[id as usize].as_ref() {
+                let parent_path_clone = parent_path.clone();
+                for &child_id in children {
+                    if let Some(Some(child_entry)) = entries.get(child_id as usize) {
+                        let child_path = if parent_path_clone.ends_with('\\') {
+                            format!("{}{}", parent_path_clone, child_entry.name)
+                        } else {
+                            format!("{}\\{}", parent_path_clone, child_entry.name)
+                        };
+                        path_map[child_id as usize] = Some(child_path);
+                        resolved_count += 1;
+                        if child_entry.is_dir {
+                            queue.push_back(child_id);
+                        }
                     }
                 }
             }
         }
     }
+    println!("Phase 2 finished: Resolved {} paths", resolved_count);
 
     // 2. PARALLEL METADATA FETCHING
     println!("Phase 3: Multi-threaded size retrieval...");
@@ -468,33 +489,56 @@ fn build_scan_tree(
     drive_mount: &str,
     info_map: &[Option<(String, u64, u64, bool)>],
     all_entries: &[Option<MftEntry>],
+    app_handle: &tauri::AppHandle,
+    start_time: std::time::Instant,
+    cancel_flag: &Arc<AtomicBool>,
 ) -> ScanNode {
     println!("Phase 4: Building Tree (Deterministic Aggregation)...");
-    let root_ref: u64 = 5;
-    const CULL_LIMIT: u64 = 20 * 1024; // 20KB limit for UI performance
+
+    // Dynamic Root Detection: Usually 5
+    let mut root_ref: u64 = 5;
+    for (i, entry) in all_entries.iter().enumerate() {
+        if let Some(e) = entry {
+            if e.parent_ref == i as u64 && i > 0 {
+                root_ref = i as u64;
+                break;
+            }
+        }
+    }
+
+    const CULL_LIMIT_FILE: u64 = 10 * 1024 * 1024; // 10MB for files
+    const CULL_LIMIT_DIR: u64 = 50 * 1024 * 1024; // 50MB for directories
 
     // 1. Map all children to their parents for O(1) lookups
     let mut children_map: Vec<Vec<u32>> = vec![Vec::new(); all_entries.len()];
     for (id, entry_opt) in all_entries.iter().enumerate() {
         if let Some(entry) = entry_opt {
-            if id as u64 != root_ref && entry.parent_ref < all_entries.len() as u64 {
+            let id = id as u64;
+            if id != root_ref && entry.parent_ref < all_entries.len() as u64 {
                 children_map[entry.parent_ref as usize].push(id as u32);
             }
         }
     }
 
-    // 2. Recursive build function to ensure sizes bubble up correctly
     fn build_node_recursive(
         id: u64,
         info_map: &[Option<(String, u64, u64, bool)>],
         all_entries: &[Option<MftEntry>],
         children_list: &[Vec<u32>],
-        cull_limit: u64,
+        cull_limit_file: u64,
+        cull_limit_dir: u64,
+        app_handle: &tauri::AppHandle,
+        start_time: std::time::Instant,
+        progress_counter: &std::sync::atomic::AtomicU64,
+        cancel: &Arc<AtomicBool>,
     ) -> Option<ScanNode> {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+
         let (path, size, modified, is_dir) = info_map.get(id as usize)?.as_ref()?;
         let mft = all_entries.get(id as usize)?.as_ref()?;
 
-        // Base node - directories start at 0 size and will sum their children
         let mut node = ScanNode {
             name: mft.name.clone(),
             path: path.clone(),
@@ -515,36 +559,87 @@ fn build_scan_tree(
             last_modified: if *modified > 0 { Some(*modified) } else { None },
         };
 
-        // Recursive child processing
-        for &cid in &children_list[id as usize] {
-            if let Some(child) =
-                build_node_recursive(cid as u64, info_map, all_entries, children_list, cull_limit)
-            {
-                // ADD child stats to parent before deciding to cull
-                node.size += child.size;
-                node.file_count += child.file_count;
+        if let Some(children_ids) = children_list.get(id as usize) {
+            for &cid in children_ids {
+                if let Some(child) = build_node_recursive(
+                    cid as u64,
+                    info_map,
+                    all_entries,
+                    children_list,
+                    cull_limit_file,
+                    cull_limit_dir,
+                    app_handle,
+                    start_time,
+                    progress_counter,
+                    cancel,
+                ) {
+                    node.size += child.size;
+                    node.file_count += child.file_count;
 
-                // Only keep dirs or large files in the the final tree sent to UI
-                if child.is_dir || child.size >= cull_limit {
-                    node.children.push(child);
+                    // Culling for performance
+                    let keep = if child.is_dir {
+                        child.size >= cull_limit_dir
+                    } else {
+                        child.size >= cull_limit_file
+                    };
+
+                    if keep {
+                        node.children.push(child);
+                    }
                 }
             }
+        }
+
+        let processed = progress_counter.fetch_add(1, Ordering::Relaxed);
+        if processed % 10000 == 0 {
+            let _ = app_handle.emit(
+                "scan-progress",
+                ScanProgress {
+                    files_scanned: processed,
+                    bytes_scanned: 0,
+                    current_path: format!("Turbo-Mode Phase 4: Organizing... ({})", processed),
+                    percent: 0.0,
+                    elapsed_ms: start_time.elapsed().as_millis() as u64,
+                },
+            );
         }
 
         node.children.sort_by(|a, b| b.size.cmp(&a.size));
         Some(node)
     }
 
-    build_node_recursive(root_ref, info_map, all_entries, &children_map, CULL_LIMIT).unwrap_or_else(
-        || ScanNode {
-            name: drive_mount.to_string(),
-            path: drive_mount.to_string(),
-            size: 0,
-            is_dir: true,
-            children: Vec::new(),
-            file_count: 0,
-            category: FileCategory::Other,
-            last_modified: None,
-        },
+    let p_counter = std::sync::atomic::AtomicU64::new(0);
+    build_node_recursive(
+        root_ref,
+        info_map,
+        all_entries,
+        &children_map,
+        CULL_LIMIT_FILE,
+        CULL_LIMIT_DIR,
+        app_handle,
+        start_time,
+        &p_counter,
+        cancel_flag,
     )
+    .unwrap_or_else(|| ScanNode {
+        name: drive_mount.to_string(),
+        path: drive_mount.to_string(),
+        size: 0,
+        is_dir: true,
+        children: Vec::new(),
+        file_count: 0,
+        category: FileCategory::Other,
+        last_modified: None,
+    })
+}
+
+fn format_bytes(bytes: u64) -> String {
+    let units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let mut size = bytes as f64;
+    let mut unit_idx = 0;
+    while size >= 1024.0 && unit_idx < units.len() - 1 {
+        size /= 1024.0;
+        unit_idx += 1;
+    }
+    format!("{:.2} {}", size, units[unit_idx])
 }
