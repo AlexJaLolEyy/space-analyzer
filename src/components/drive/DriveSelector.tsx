@@ -1,11 +1,12 @@
 import { motion, Variants } from "framer-motion";
-import { HardDrive } from "lucide-react";
+import { History, HardDrive } from "lucide-react";
 import { useDrives } from "../../hooks/useDrives";
 import type { DriveInfo } from "../../types/drive";
 import { DriveCard } from "./DriveCard";
 
 interface DriveSelectorProps {
     onDriveSelected: (drive: DriveInfo) => void;
+    onOpenHistory?: () => void;
 }
 
 const containerVariants: Variants = {
@@ -18,7 +19,7 @@ const cardVariants: Variants = {
     visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
 };
 
-export function DriveSelector({ onDriveSelected }: DriveSelectorProps) {
+export function DriveSelector({ onDriveSelected, onOpenHistory }: DriveSelectorProps) {
     const { drives, isLoading, error } = useDrives();
 
     if (isLoading) {
@@ -109,13 +110,17 @@ export function DriveSelector({ onDriveSelected }: DriveSelectorProps) {
                     transition={{ delay: 0.6 }}
                     className="flex flex-col items-center gap-2"
                 >
-                    <p className="text-center text-xs text-muted-foreground/60">
+                    <p className="text-center text-xs text-muted-foreground/60 mb-6">
                         Click on a drive card to begin scanning
                     </p>
-                    <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/5 border border-primary/10 text-[10px] text-primary/70 font-medium">
-                        <span className="w-1 h-1 rounded-full bg-primary animate-pulse" />
-                        Turbo Mode available: Run as Administrator for 50x faster NTFS scanning
-                    </div>
+                    {onOpenHistory && (
+                        <button
+                            onClick={onOpenHistory}
+                            className="bg-secondary text-secondary-foreground px-6 py-2.5 rounded-full text-sm font-semibold shadow-sm hover:shadow transition-all flex items-center gap-2"
+                        >
+                            <History size={16} /> Open Scan History
+                        </button>
+                    )}
                 </motion.div>
             </div>
         </motion.div>
