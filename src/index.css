@@ -4,6 +4,7 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
+  /* ─── Base Palette ─────────────────────────────────────────────── */
   /* Warm cream/ivory light mode — never plain white */
   --background: hsl(36 33% 96%);
   --foreground: hsl(224 35% 14%);
@@ -26,13 +27,44 @@
   --ring: hsl(221.2 83.2% 53.3%);
   --radius: 0.75rem;
 
-  /* Glassmorphism tokens - Light */
+  /* ─── Semantic Status ─────────────────────────────────────────── */
+  --success: hsl(142 71% 45%);
+  --success-foreground: hsl(0 0% 100%);
+  --warning: hsl(38 92% 50%);
+  --warning-foreground: hsl(0 0% 0%);
+  --info: hsl(199 89% 48%);
+  --info-foreground: hsl(0 0% 100%);
+
+  /* ─── Usage Gradient Tokens ───────────────────────────────────── */
+  --usage-low: hsl(142 71% 45%);
+  --usage-mid: hsl(38 92% 50%);
+  --usage-high: hsl(0 84% 60%);
+
+  /* ─── Category Color Tokens ───────────────────────────────────── */
+  --cat-video:      hsl(280 70% 55%);
+  --cat-image:      hsl(150 70% 42%);
+  --cat-audio:      hsl(30 80% 55%);
+  --cat-document:   hsl(210 80% 55%);
+  --cat-archive:    hsl(45 90% 50%);
+  --cat-code:       hsl(180 70% 42%);
+  --cat-system:     hsl(0 70% 55%);
+  --cat-executable: hsl(340 70% 55%);
+  --cat-database:   hsl(20 70% 45%);
+  --cat-font:       hsl(250 60% 65%);
+  --cat-other:      hsl(220 10% 60%);
+
+  /* ─── Typography ──────────────────────────────────────────────── */
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+
+  /* ─── Glassmorphism ───────────────────────────────────────────── */
   --glass-bg: rgba(255, 253, 247, 0.55);
   --glass-border: rgba(200, 185, 155, 0.25);
   --glass-shadow: 0 8px 32px 0 rgba(80, 80, 120, 0.08);
 }
 
 .dark {
+  /* ─── Base Palette ─────────────────────────────────────────────── */
   /* Rich deep-navy dark mode — never solid black */
   --background: hsl(226 30% 10%);
   --foreground: hsl(210 25% 94%);
@@ -54,12 +86,71 @@
   --input: hsl(220 22% 22%);
   --ring: hsl(224 76% 55%);
 
-  /* Glassmorphism tokens - Dark */
-  --glass-bg: rgba(22, 26, 42, 0.55);
-  --glass-border: rgba(100, 120, 200, 0.12);
-  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+  /* ─── Glassmorphism Dark ──────────────────────────────────────── */
+  --glass-bg: rgba(22, 26, 42, 0.60);
+  --glass-border: rgba(100, 120, 200, 0.15);
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.35);
 }
 
+/* ─── Accent Color Presets ────────────────────────────────────────── */
+/* Applied via class on <html>, e.g. "accent-purple" */
+.accent-purple {
+  --primary: hsl(258 90% 66%);
+  --primary-foreground: hsl(258 20% 98%);
+  --ring: hsl(258 90% 66%);
+  --accent: hsl(258 60% 92%);
+  --accent-foreground: hsl(258 70% 35%);
+}
+.dark.accent-purple {
+  --primary: hsl(258 80% 70%);
+  --ring: hsl(258 80% 70%);
+  --accent: hsl(258 40% 22%);
+  --accent-foreground: hsl(210 25% 94%);
+}
+
+.accent-emerald {
+  --primary: hsl(152 60% 40%);
+  --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(152 60% 40%);
+  --accent: hsl(152 60% 88%);
+  --accent-foreground: hsl(152 70% 20%);
+}
+.dark.accent-emerald {
+  --primary: hsl(152 60% 52%);
+  --ring: hsl(152 60% 52%);
+  --accent: hsl(152 40% 20%);
+  --accent-foreground: hsl(210 25% 94%);
+}
+
+.accent-amber {
+  --primary: hsl(38 92% 50%);
+  --primary-foreground: hsl(0 0% 10%);
+  --ring: hsl(38 92% 50%);
+  --accent: hsl(38 92% 90%);
+  --accent-foreground: hsl(38 70% 20%);
+}
+.dark.accent-amber {
+  --primary: hsl(38 90% 58%);
+  --ring: hsl(38 90% 58%);
+  --accent: hsl(38 40% 20%);
+  --accent-foreground: hsl(210 25% 94%);
+}
+
+.accent-rose {
+  --primary: hsl(346 87% 60%);
+  --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(346 87% 60%);
+  --accent: hsl(346 87% 92%);
+  --accent-foreground: hsl(346 70% 25%);
+}
+.dark.accent-rose {
+  --primary: hsl(346 80% 68%);
+  --ring: hsl(346 80% 68%);
+  --accent: hsl(346 40% 20%);
+  --accent-foreground: hsl(210 25% 94%);
+}
+
+/* ─── Base Styles ─────────────────────────────────────────────────── */
 @layer base {
   * {
     @apply border-border;
@@ -67,21 +158,52 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: "Inter", system-ui, -apple-system, sans-serif;
+    font-family: var(--font-sans);
     font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  /* Monospace utility — use for file sizes, paths, numbers */
+  .mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
   }
 }
 
+/* ─── Component Styles ────────────────────────────────────────────── */
 @layer components {
   .glass {
     background: var(--glass-bg);
-    backdrop-filter: blur(16px) saturate(180%);
-    -webkit-backdrop-filter: blur(16px) saturate(180%);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
     border: 1px solid var(--glass-border);
     box-shadow: var(--glass-shadow);
   }
+
+  .glass-strong {
+    background: var(--glass-bg);
+    backdrop-filter: blur(28px) saturate(200%);
+    -webkit-backdrop-filter: blur(28px) saturate(200%);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--glass-shadow), 0 0 0 0.5px rgba(255,255,255,0.04);
+  }
+
+  /* Subtle gradient bar for size bars */
+  .size-bar {
+    background: linear-gradient(90deg, var(--primary) 0%, color-mix(in hsl, var(--primary) 80%, transparent) 100%);
+  }
+
+  /* No scrollbars but still scrollable */
+  .no-scrollbar {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
 }
 
+/* ─── Theme Token Map (Tailwind @theme) ───────────────────────────── */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -102,7 +224,25 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-info: var(--info);
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
+
+  --font-mono: var(--font-mono);
+}
+
+/* ─── Reduced Motion ──────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
