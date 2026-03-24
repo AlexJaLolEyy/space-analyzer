@@ -17,6 +17,26 @@ export function ScanStats({ progress }: ScanStatsProps) {
     const mins = Math.floor(elapsedSeconds / 60);
     const secs = Math.floor(elapsedSeconds % 60).toString().padStart(2, "0");
 
+    let etaStr = "Calc...";
+    if (filesPerSecond > 0 && elapsedSeconds > 2) {
+        // Simple heuristic for ETA: assume ~300k files average on a full scan if we're on root
+        // If we know total files, we could do better. MFT doesn't know total upfront.
+        // Actually, if it's phase 2 in MFT, we have the total files basically from phase 1.
+        // But progress doesn't have total_files. Let's make an ETA based on a rough 400k file average, 
+        // or just say N/A if we don't know the bounds.
+        // The plan says "ETA calculation based on scan speed + estimated remaining files"
+        const estimatedTotalFiles = Math.max(progress.files_scanned * 1.5, 500000);
+        const remainingFiles = Math.max(0, estimatedTotalFiles - progress.files_scanned);
+        const etaSeconds = remainingFiles / filesPerSecond;
+        if (etaSeconds < 3600) {
+            const etaM = Math.floor(etaSeconds / 60);
+            const etaS = Math.floor(etaSeconds % 60).toString().padStart(2, "0");
+            etaStr = `${etaM}:${etaS}`;
+        } else {
+            etaStr = "> 1hr";
+        }
+    }
+
     const stats = [
         {
             icon: <FileText size={18} />,
@@ -42,10 +62,16 @@ export function ScanStats({ progress }: ScanStatsProps) {
             value: `${mins}:${secs}`,
             color: "hsl(30, 90%, 58%)",
         },
+        {
+            icon: <Activity size={18} />,
+            label: "Est. Remaining",
+            value: etaStr,
+            color: "hsl(200, 70%, 52%)",
+        },
     ];
 
     return (
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 w-full">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 w-full">
             {stats.map((stat, i) => (
                 <motion.div
                     key={stat.label}
