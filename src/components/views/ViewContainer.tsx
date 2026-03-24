@@ -1,17 +1,19 @@
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search } from "lucide-react";
+import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search, CircleDashed } from "lucide-react";
 import { useMemo } from "react";
 import { useScanStore } from "../../stores/scanStore";
 import { BarChartView } from "./BarChartView";
 import { ListView } from "./ListView";
 import { PieChartView } from "./PieChartView";
 import { TreemapView } from "./TreemapView";
+import { SunburstView } from "./SunburstView";
 
 const VIEW_BUTTONS = [
     { id: "list" as const, label: "List", icon: <LayoutList size={15} /> },
     { id: "pie" as const, label: "Pie", icon: <PieChart size={15} /> },
     { id: "bar" as const, label: "Bar", icon: <BarChartHorizontal size={15} /> },
     { id: "treemap" as const, label: "Map", icon: <Grid2X2 size={15} /> },
+    { id: "sunburst" as const, label: "Sunburst", icon: <CircleDashed size={15} /> },
 ];
 
 export function ViewContainer() {
@@ -19,6 +21,7 @@ export function ViewContainer() {
         currentNode, currentPath,
         viewMode, setViewMode,
         searchQuery, setSearchQuery,
+        categoryFilter, setCategoryFilter,
         setCurrentPath,
     } = useScanStore();
 
@@ -29,8 +32,11 @@ export function ViewContainer() {
             const query = searchQuery.toLowerCase();
             children = children.filter(c => c.name.toLowerCase().includes(query));
         }
+        if (categoryFilter !== "all") {
+            children = children.filter(c => c.category === categoryFilter || c.is_dir);
+        }
         return { ...currentNode, children };
-    }, [currentNode, searchQuery]);
+    }, [currentNode, searchQuery, categoryFilter]);
 
     const canGoBack = currentPath.length > 1;
 
@@ -48,9 +54,10 @@ export function ViewContainer() {
             <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 bg-background/40 flex-wrap shrink-0">
                 {/* View mode tabs */}
                 <div className="flex gap-1 p-1 bg-secondary rounded-lg">
-                    {VIEW_BUTTONS.map(btn => (
+                    {VIEW_BUTTONS.map((btn, index) => (
                         <button
                             key={btn.id}
+                            title={`${btn.label} view (${index + 1})`}
                             onClick={() => setViewMode(btn.id)}
                             className={`px-2.5 py-1.5 rounded-md flex items-center gap-1.5 text-xs font-semibold transition-all duration-150 ${viewMode === btn.id
                                 ? "bg-background shadow-sm text-foreground"
@@ -68,7 +75,7 @@ export function ViewContainer() {
                         <button
                             onClick={() => setCurrentPath(currentPath.slice(0, -1))}
                             className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-muted transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                            title="Go up (Esc)"
+                            title="Go up (Esc, Ctrl+Backspace)"
                         >
                             <ChevronLeft size={13} />
                         </button>
@@ -101,12 +108,33 @@ export function ViewContainer() {
                     })}
                 </div>
 
+                {/* Category Filter */}
+                <select
+                    value={categoryFilter}
+                    onChange={(e) => setCategoryFilter(e.target.value as any)}
+                    className="bg-secondary/60 border border-border/60 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-ring outline-none"
+                    title="Filter by category"
+                >
+                    <option value="all">All Types</option>
+                    <option value="Image">Images</option>
+                    <option value="Video">Videos</option>
+                    <option value="Audio">Audio</option>
+                    <option value="Document">Documents</option>
+                    <option value="Archive">Archives</option>
+                    <option value="Code">Code</option>
+                    <option value="Executable">Executables</option>
+                    <option value="System">System</option>
+                    <option value="Database">Databases</option>
+                    <option value="Font">Fonts</option>
+                    <option value="Unknown">Others</option>
+                </select>
+
                 {/* Search */}
                 <div className="flex items-center gap-2 bg-secondary/60 px-3 py-1.5 rounded-lg border border-border/60 focus-within:ring-2 focus-within:ring-ring w-52 transition-shadow shrink-0">
                     <Search size={13} className="text-muted-foreground shrink-0" />
                     <input
                         type="text"
-                        placeholder="Filter items…"
+                        placeholder="Filter items… (Ctrl+F)"
                         value={searchQuery}
                         onChange={e => setSearchQuery(e.target.value)}
                         className="bg-transparent border-none outline-none text-xs w-full placeholder:text-muted-foreground"
@@ -118,16 +146,17 @@ export function ViewContainer() {
             <AnimatePresence mode="wait">
                 <motion.div
                     key={viewMode}
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, y: -8 }}
-                    transition={{ duration: 0.18 }}
+                    initial={{ opacity: 0, scale: 0.98, x: 10 }}
+                    animate={{ opacity: 1, scale: 1, x: 0 }}
+                    exit={{ opacity: 0, scale: 0.98, x: -10 }}
+                    transition={{ type: "spring", stiffness: 300, damping: 30 }}
                     className="flex-1 overflow-hidden relative glass m-3 mb-2 rounded-xl flex flex-col min-h-0"
                 >
                     {viewMode === "list" && <ListView node={filteredNode} />}
                     {viewMode === "pie" && <PieChartView node={filteredNode} />}
                     {viewMode === "bar" && <BarChartView node={filteredNode} />}
                     {viewMode === "treemap" && <TreemapView node={filteredNode} />}
+                    {viewMode === "sunburst" && <SunburstView node={filteredNode} />}
                 </motion.div>
             </AnimatePresence>
         </div>

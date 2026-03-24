@@ -1,8 +1,13 @@
-import { AlignLeft, Archive, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, Video } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { motion } from "framer-motion";
+import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, Trash2, Video } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { formatBytes } from "../../lib/format";
+import { useScanStore } from "../../stores/scanStore";
+import { useToastStore } from "../../stores/toastStore";
 import type { FileCategory, ScanNode } from "../../types/scan";
+import { ConfirmModal } from "../ui/ConfirmModal";
 
 interface ListItemProps {
     node: ScanNode;
@@ -27,16 +32,30 @@ const getCategoryIcon = (category: FileCategory, isDir: boolean, color: string) 
     }
 };
 
+// Get short extension badge (e.g. ".mp4", ".zip") — only for files, max 5 chars
+const getExtBadge = (name: string): string | null => {
+    const dot = name.lastIndexOf(".");
+    if (dot < 0) return null;
+    const ext = name.slice(dot).toLowerCase();
+    if (ext.length > 6) return null;
+    return ext;
+};
+
 export function ListItem({ node, parentSize, onClick }: ListItemProps) {
     const isDir = node.is_dir;
     const percentage = parentSize > 0 ? (node.size / parentSize) * 100 : 0;
     const color = getCategoryColor(node.category);
+    const extBadge = !isDir ? getExtBadge(node.name) : null;
 
-    // Context Menu State
+    const { addToast } = useToastStore();
+    const removeNode = useScanStore((s) => s.removeNode);
+
     const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+    const [deleteConfig, setDeleteConfig] = useState<{ mode: "recycle" | "permanent"; open: boolean }>({ mode: "recycle", open: false });
+    const [isDeleting, setIsDeleting] = useState(false);
 
     const MENU_W = 168;
-    const MENU_H = 84;
+    const MENU_H = 140;
     const handleContextMenu = (e: React.MouseEvent) => {
         e.preventDefault();
         const x = Math.min(e.clientX, window.innerWidth - MENU_W - 4);
@@ -53,7 +72,7 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
             const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
             await revealItemInDir(node.path);
         } catch (err) {
-            console.error("Failed to open path:", err);
+            addToast("error", "Failed to open path");
         }
     };
 
@@ -62,16 +81,39 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
         handleCloseMenu();
         try {
             await navigator.clipboard.writeText(node.path);
+            addToast("success", "Path copied to clipboard");
+        } catch {
+            addToast("error", "Failed to copy path");
+        }
+    };
+
+    const handleDeleteClick = (mode: "recycle" | "permanent", e: React.MouseEvent) => {
+        e.stopPropagation();
+        handleCloseMenu();
+        setDeleteConfig({ mode, open: true });
+    };
+
+    const confirmDelete = async () => {
+        setIsDeleting(true);
+        try {
+            await invoke("delete_item", { path: node.path, permanent: deleteConfig.mode === "permanent" });
+            addToast("success", `Moved to ${deleteConfig.mode === "recycle" ? "Recycle Bin" : "permanently deleted"}`);
+            removeNode(node.path);
         } catch (err) {
-            console.error("Failed to copy path:", err);
+            addToast("error", `Failed to delete: ${err}`);
+        } finally {
+            setIsDeleting(false);
+            setDeleteConfig({ mode: "recycle", open: false });
         }
     };
 
     return (
         <>
-            <div
+            <motion.div
                 onClick={() => onClick(node)}
                 onContextMenu={handleContextMenu}
+                whileHover={{ x: 4 }}
+                transition={{ type: "spring", stiffness: 400, damping: 30 }}
                 className="flex items-center justify-between p-3 border-b border-border/50 hover:bg-muted/50 cursor-pointer transition-colors group relative"
             >
                 <div className="flex items-center gap-3 overflow-hidden">
@@ -86,27 +128,52 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                             {isDir ? (
                                 <span>{node.file_count.toLocaleString()} items</span>
                             ) : (
-                                <span>{node.category}</span>
+                                <div className="flex items-center gap-1.5">
+                                    <span>{node.category}</span>
+                                    {extBadge && (
+                                        <span className="font-mono text-[10px] px-1 py-0.5 rounded bg-muted text-muted-foreground">
+                                            {extBadge}
+                                        </span>
+                                    )}
+                                </div>
                             )}
-                            <span className="hidden group-hover:inline-block">
-                                • {(percentage).toFixed(2)}%
-                            </span>
                         </div>
                     </div>
                 </div>
 
-                <div className="flex items-center gap-4 shrink-0 w-48 justify-end">
-                    <span className="text-sm font-medium whitespace-nowrap">
+                <div className="flex items-center gap-4 shrink-0">
+                    {/* Always-visible percentage */}
+                    <span className="text-xs font-mono text-muted-foreground tabular-nums w-10 text-right">
+                        {percentage.toFixed(1)}%
+                    </span>
+
+                    <span className="text-sm font-mono font-medium whitespace-nowrap tabular-nums">
                         {formatBytes(node.size)}
                     </span>
+
+                    {/* Gradient size bar */}
                     <div className="w-20 h-2 bg-secondary rounded-full overflow-hidden">
                         <div
-                            className="h-full rounded-full opacity-80"
-                            style={{ width: `${percentage}%`, backgroundColor: color }}
+                            className="h-full rounded-full opacity-90 transition-all duration-500"
+                            style={{
+                                width: `${percentage}%`,
+                                background: `linear-gradient(90deg, ${color}, color-mix(in hsl, ${color} 60%, transparent))`
+                            }}
                         />
                     </div>
+
+                    {/* Hover action buttons */}
+                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
+                        <button
+                            onClick={(e) => handleDeleteClick("recycle", e)}
+                            title="Move to Recycle Bin"
+                            className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                        >
+                            <Trash2 size={13} />
+                        </button>
+                    </div>
                 </div>
-            </div>
+            </motion.div>
 
             {/* Context Menu Overlay */}
             {menuPos && (
@@ -117,24 +184,48 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                         onContextMenu={(e) => { e.preventDefault(); handleCloseMenu(); }}
                     />
                     <div
-                        className="fixed z-50 min-w-40 bg-popover text-popover-foreground border border-border shadow-lg rounded-lg p-1 text-sm flex flex-col backdrop-blur-sm"
+                        className="fixed z-50 min-w-44 bg-popover text-popover-foreground border border-border shadow-xl rounded-xl p-1 text-sm flex flex-col backdrop-blur-sm"
                         style={{ top: menuPos.y, left: menuPos.x }}
                     >
                         <button
-                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-sm transition-colors"
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors"
                             onClick={handleOpenInExplorer}
                         >
                             <Folder size={14} /> Open in Explorer
                         </button>
                         <button
-                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-sm transition-colors"
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors"
                             onClick={handleCopyPath}
                         >
                             <FileKey size={14} /> Copy Path
                         </button>
+                        <div className="h-px bg-border my-1" />
+                        <button
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors text-amber-500"
+                            onClick={(e) => handleDeleteClick("recycle", e)}
+                        >
+                            <Trash2 size={14} /> Move to Recycle Bin
+                        </button>
+                        <button
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-destructive rounded-lg transition-colors text-destructive"
+                            onClick={(e) => handleDeleteClick("permanent", e)}
+                        >
+                            <ArchiveX size={14} /> Delete Permanently
+                        </button>
                     </div>
                 </>
             )}
+
+            <ConfirmModal
+                isOpen={deleteConfig.open}
+                title={deleteConfig.mode === "permanent" ? "Delete Permanently?" : "Move to Recycle Bin?"}
+                message={`Are you sure you want to ${deleteConfig.mode === "permanent" ? "permanently delete" : "move"} "${node.name}" (${formatBytes(node.size)}) ${deleteConfig.mode === "permanent" ? "from disk" : "to the Recycle Bin"}? This action cannot be undone from within the app.`}
+                confirmLabel={deleteConfig.mode === "permanent" ? "Delete" : "Move to Bin"}
+                variant={deleteConfig.mode === "permanent" ? "danger" : "warning"}
+                isLoading={isDeleting}
+                onConfirm={confirmDelete}
+                onCancel={() => setDeleteConfig({ ...deleteConfig, open: false })}
+            />
         </>
     );
 }
