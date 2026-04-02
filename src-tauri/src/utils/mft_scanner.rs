@@ -436,8 +436,11 @@ fn get_file_info(
                 }
             }
 
-            // Final additions
+            // Final additions (flush remainder counters)
             b_total.fetch_add(thread_bytes, Ordering::Relaxed);
+            if thread_files > 0 {
+                f_count.fetch_add(thread_files, Ordering::Relaxed);
+            }
 
             if let Ok(mut res) = results.lock() {
                 for (idx, id) in (start..end).enumerate() {
@@ -465,7 +468,7 @@ fn get_file_info(
                     files_scanned: c,
                     bytes_scanned: b,
                     current_path: format!(
-                        "Turbo-Mode Phase 3: {:.2} TB scanned...",
+                        "Turbo-Mode Phase 3: {:.2} TiB scanned...",
                         b as f64 / (1024.0 * 1024.0 * 1024.0 * 1024.0)
                     ),
                     percent: 0.0,
@@ -506,9 +509,6 @@ fn build_scan_tree(
         }
     }
 
-    const CULL_LIMIT_FILE: u64 = 10 * 1024 * 1024; // 10MB for files
-    const CULL_LIMIT_DIR: u64 = 50 * 1024 * 1024; // 50MB for directories
-
     // 1. Map all children to their parents for O(1) lookups
     let mut children_map: Vec<Vec<u32>> = vec![Vec::new(); all_entries.len()];
     for (id, entry_opt) in all_entries.iter().enumerate() {
@@ -525,8 +525,6 @@ fn build_scan_tree(
         info_map: &[Option<(String, u64, u64, bool)>],
         all_entries: &[Option<MftEntry>],
         children_list: &[Vec<u32>],
-        cull_limit_file: u64,
-        cull_limit_dir: u64,
         app_handle: &tauri::AppHandle,
         start_time: std::time::Instant,
         progress_counter: &std::sync::atomic::AtomicU64,
@@ -559,6 +557,7 @@ fn build_scan_tree(
             last_modified: if *modified > 0 { Some(*modified) } else { None },
         };
 
+        let mut raw_children: Vec<ScanNode> = Vec::new();
         if let Some(children_ids) = children_list.get(id as usize) {
             for &cid in children_ids {
                 if let Some(child) = build_node_recursive(
@@ -566,28 +565,57 @@ fn build_scan_tree(
                     info_map,
                     all_entries,
                     children_list,
-                    cull_limit_file,
-                    cull_limit_dir,
                     app_handle,
                     start_time,
                     progress_counter,
                     cancel,
                 ) {
-                    node.size += child.size;
-                    node.file_count += child.file_count;
-
-                    // Culling for performance
-                    let keep = if child.is_dir {
-                        child.size >= cull_limit_dir
-                    } else {
-                        child.size >= cull_limit_file
-                    };
-
-                    if keep {
-                        node.children.push(child);
-                    }
+                    raw_children.push(child);
                 }
             }
+        }
+
+        for c in &raw_children {
+            node.size += c.size;
+            node.file_count += c.file_count;
+        }
+
+        const MIN_THRESHOLD: u64 = 1024 * 1024;
+        let threshold = (node.size / 500).max(MIN_THRESHOLD);
+
+        raw_children.sort_by(|a, b| b.size.cmp(&a.size));
+
+        let mut culled_size: u64 = 0;
+        let mut culled_n: u32 = 0;
+        let mut culled_fc: u64 = 0;
+
+        for child in raw_children {
+            if child.size >= threshold {
+                node.children.push(child);
+            } else {
+                culled_size += child.size;
+                culled_n += 1;
+                culled_fc += child.file_count;
+            }
+        }
+
+        if culled_n > 0 {
+            let base = path.trim_end_matches('\\');
+            let others_path = if path.ends_with('\\') {
+                format!("{}(.space-analyzer-{}-others)", base, culled_n)
+            } else {
+                format!("{}\\(.space-analyzer-{}-others)", base, culled_n)
+            };
+            node.children.push(ScanNode {
+                name: format!("({} others)", culled_n),
+                path: others_path,
+                size: culled_size,
+                is_dir: false,
+                children: Vec::new(),
+                file_count: culled_fc,
+                category: FileCategory::Other,
+                last_modified: None,
+            });
         }
 
         let processed = progress_counter.fetch_add(1, Ordering::Relaxed);
@@ -614,8 +642,6 @@ fn build_scan_tree(
         info_map,
         all_entries,
         &children_map,
-        CULL_LIMIT_FILE,
-        CULL_LIMIT_DIR,
         app_handle,
         start_time,
         &p_counter,
@@ -634,7 +660,7 @@ fn build_scan_tree(
 }
 
 fn format_bytes(bytes: u64) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB", "PB"];
+    let units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
     let mut size = bytes as f64;
     let mut unit_idx = 0;
     while size >= 1024.0 && unit_idx < units.len() - 1 {

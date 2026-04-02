@@ -8,7 +8,7 @@ pub struct DuplicateFile {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DuplicateGroup {
-    pub hash: String,
+    pub content_hash: String,
     pub size: u64,
     pub files: Vec<DuplicateFile>,
     pub total_wasted: u64,
