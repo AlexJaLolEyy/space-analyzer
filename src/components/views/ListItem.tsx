@@ -1,8 +1,8 @@
-import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, Trash2, Video } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
+import { scheduleDeferredDelete } from "../../lib/deferredDelete";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
@@ -12,7 +12,10 @@ import { ConfirmModal } from "../ui/ConfirmModal";
 interface ListItemProps {
     node: ScanNode;
     parentSize: number;
-    onClick: (node: ScanNode) => void;
+    onActivate: (node: ScanNode, e: React.MouseEvent) => void;
+    isSelected?: boolean;
+    isFocused?: boolean;
+    rowRef?: React.RefCallback<HTMLDivElement | null>;
 }
 
 const getCategoryIcon = (category: FileCategory, isDir: boolean, color: string) => {
@@ -32,7 +35,6 @@ const getCategoryIcon = (category: FileCategory, isDir: boolean, color: string) 
     }
 };
 
-// Get short extension badge (e.g. ".mp4", ".zip") — only for files, max 5 chars
 const getExtBadge = (name: string): string | null => {
     const dot = name.lastIndexOf(".");
     if (dot < 0) return null;
@@ -41,7 +43,7 @@ const getExtBadge = (name: string): string | null => {
     return ext;
 };
 
-export function ListItem({ node, parentSize, onClick }: ListItemProps) {
+export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, rowRef }: ListItemProps) {
     const isDir = node.is_dir;
     const percentage = parentSize > 0 ? (node.size / parentSize) * 100 : 0;
     const color = getCategoryColor(node.category);
@@ -49,10 +51,12 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
 
     const { addToast } = useToastStore();
     const removeNode = useScanStore((s) => s.removeNode);
+    const restoreRemovedNode = useScanStore((s) => s.restoreRemovedNode);
 
     const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
     const [deleteConfig, setDeleteConfig] = useState<{ mode: "recycle" | "permanent"; open: boolean }>({ mode: "recycle", open: false });
-    const [isDeleting, setIsDeleting] = useState(false);
+
+    const isSynthetic = node.path.includes(".space-analyzer");
 
     const MENU_W = 168;
     const MENU_H = 140;
@@ -71,7 +75,7 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
         try {
             const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
             await revealItemInDir(node.path);
-        } catch (err) {
+        } catch {
             addToast("error", "Failed to open path");
         }
     };
@@ -90,31 +94,36 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
     const handleDeleteClick = (mode: "recycle" | "permanent", e: React.MouseEvent) => {
         e.stopPropagation();
         handleCloseMenu();
+        if (isSynthetic) {
+            addToast("warning", "This aggregate entry cannot be deleted.");
+            return;
+        }
         setDeleteConfig({ mode, open: true });
     };
 
-    const confirmDelete = async () => {
-        setIsDeleting(true);
-        try {
-            await invoke("delete_item", { path: node.path, permanent: deleteConfig.mode === "permanent" });
-            addToast("success", `Moved to ${deleteConfig.mode === "recycle" ? "Recycle Bin" : "permanently deleted"}`);
-            removeNode(node.path);
-        } catch (err) {
-            addToast("error", `Failed to delete: ${err}`);
-        } finally {
-            setIsDeleting(false);
-            setDeleteConfig({ mode: "recycle", open: false });
-        }
+    const confirmDelete = () => {
+        const permanent = deleteConfig.mode === "permanent";
+        setDeleteConfig({ mode: deleteConfig.mode, open: false });
+        scheduleDeferredDelete({
+            node,
+            permanent,
+            removeNode,
+            restoreRemovedNode,
+            addToast,
+        });
     };
 
     return (
         <>
             <motion.div
-                onClick={() => onClick(node)}
+                ref={rowRef}
+                onClick={(e) => onActivate(node, e)}
                 onContextMenu={handleContextMenu}
                 whileHover={{ x: 4 }}
                 transition={{ type: "spring", stiffness: 400, damping: 30 }}
-                className="flex items-center justify-between p-3 border-b border-border/50 hover:bg-muted/50 cursor-pointer transition-colors group relative"
+                data-list-row="1"
+                className={`flex items-center justify-between p-3 border-b border-border/50 hover:bg-muted/50 cursor-pointer transition-colors group relative outline-none ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : ""
+                    } ${isFocused ? "ring-2 ring-inset ring-ring" : ""}`}
             >
                 <div className="flex items-center gap-3 overflow-hidden">
                     <div className="shrink-0">
@@ -142,7 +151,6 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                 </div>
 
                 <div className="flex items-center gap-4 shrink-0">
-                    {/* Always-visible percentage */}
                     <span className="text-xs font-mono text-muted-foreground tabular-nums w-10 text-right">
                         {percentage.toFixed(1)}%
                     </span>
@@ -151,7 +159,6 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                         {formatBytes(node.size)}
                     </span>
 
-                    {/* Gradient size bar */}
                     <div className="w-20 h-2 bg-secondary rounded-full overflow-hidden">
                         <div
                             className="h-full rounded-full opacity-90 transition-all duration-500"
@@ -162,12 +169,13 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                         />
                     </div>
 
-                    {/* Hover action buttons */}
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                         <button
+                            type="button"
+                            disabled={isSynthetic}
                             onClick={(e) => handleDeleteClick("recycle", e)}
                             title="Move to Recycle Bin"
-                            className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                            className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-30"
                         >
                             <Trash2 size={13} />
                         </button>
@@ -175,7 +183,6 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                 </div>
             </motion.div>
 
-            {/* Context Menu Overlay */}
             {menuPos && (
                 <>
                     <div
@@ -201,13 +208,17 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
                         </button>
                         <div className="h-px bg-border my-1" />
                         <button
-                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors text-amber-500"
+                            type="button"
+                            disabled={isSynthetic}
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors text-amber-500 disabled:opacity-40"
                             onClick={(e) => handleDeleteClick("recycle", e)}
                         >
                             <Trash2 size={14} /> Move to Recycle Bin
                         </button>
                         <button
-                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-destructive rounded-lg transition-colors text-destructive"
+                            type="button"
+                            disabled={isSynthetic}
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-destructive rounded-lg transition-colors text-destructive disabled:opacity-40"
                             onClick={(e) => handleDeleteClick("permanent", e)}
                         >
                             <ArchiveX size={14} /> Delete Permanently
@@ -219,10 +230,10 @@ export function ListItem({ node, parentSize, onClick }: ListItemProps) {
             <ConfirmModal
                 isOpen={deleteConfig.open}
                 title={deleteConfig.mode === "permanent" ? "Delete Permanently?" : "Move to Recycle Bin?"}
-                message={`Are you sure you want to ${deleteConfig.mode === "permanent" ? "permanently delete" : "move"} "${node.name}" (${formatBytes(node.size)}) ${deleteConfig.mode === "permanent" ? "from disk" : "to the Recycle Bin"}? This action cannot be undone from within the app.`}
+                message={`Are you sure you want to ${deleteConfig.mode === "permanent" ? "permanently delete" : "move"} "${node.name}" (${formatBytes(node.size)}) ${deleteConfig.mode === "permanent" ? "from disk" : "to the Recycle Bin"}? You can undo for a few seconds after confirming.`}
                 confirmLabel={deleteConfig.mode === "permanent" ? "Delete" : "Move to Bin"}
                 variant={deleteConfig.mode === "permanent" ? "danger" : "warning"}
-                isLoading={isDeleting}
+                isLoading={false}
                 onConfirm={confirmDelete}
                 onCancel={() => setDeleteConfig({ ...deleteConfig, open: false })}
             />
