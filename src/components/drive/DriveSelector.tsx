@@ -73,6 +73,9 @@ export function DriveSelector({ onDriveSelected, onOpenHistory }: DriveSelectorP
                     <p className="text-muted-foreground text-base max-w-md mx-auto">
                         Select a drive to scan and visualize what's eating your disk space.
                     </p>
+                    <p className="text-muted-foreground/80 text-sm max-w-md mx-auto">
+                        Or drag a folder from Explorer onto this window to scan it.
+                    </p>
                 </motion.div>
 
                 {/* Drive grid */}

@@ -1,30 +1,36 @@
-import { AnimatePresence, motion } from "framer-motion";
-import { Download, FolderSearch, List, RotateCcw, Copy, AlertOctagon, History, Sparkles, Grid2X2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { AnimatePresence, motion } from "framer-motion";
+import { AlertOctagon, Copy, Download, FolderSearch, Grid2X2, History, List, RotateCcw, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { DriveSelector } from "./components/drive/DriveSelector";
-import type { ScanNode } from "./types/scan";
-import { ExportDialog } from "./components/features/ExportDialog";
 import { BentoDashboard } from "./components/features/BentoDashboard";
-import { TopFilesPanel } from "./components/features/TopFilesPanel";
-import { DuplicatesPanel } from "./components/features/DuplicatesPanel";
 import { BlackHolesPanel } from "./components/features/BlackHolesPanel";
-import { ScanHistoryPanel } from "./components/features/ScanHistoryPanel";
-import { ScanCompareView } from "./components/features/ScanCompareView";
 import { CleanupSuggestionsPanel } from "./components/features/CleanupSuggestionsPanel";
-import type { ScanDiff } from "./types/history";
-import { useToastStore } from "./stores/toastStore";
+import { DuplicatesPanel } from "./components/features/DuplicatesPanel";
+import { ExportDialog } from "./components/features/ExportDialog";
+import { ScanCompareView } from "./components/features/ScanCompareView";
+import { ScanHistoryPanel } from "./components/features/ScanHistoryPanel";
+import { TopFilesPanel } from "./components/features/TopFilesPanel";
 import { ScanProgress } from "./components/scan/ScanProgress";
 import { ScanSummary } from "./components/scan/ScanSummary";
+import { CommandPalette } from "./components/ui/CommandPalette";
 import { ConfirmModal } from "./components/ui/ConfirmModal";
+import { SelectionActionBar } from "./components/ui/SelectionActionBar";
 import { ViewContainer } from "./components/views/ViewContainer";
 import { useScan } from "./hooks/useScan";
 import { useScanStore } from "./stores/scanStore";
+import { useToastStore } from "./stores/toastStore";
 import type { DriveInfo } from "./types/drive";
+import type { ScanDiff } from "./types/history";
+import type { ScanNode } from "./types/scan";
 
 export function MainWorkspace() {
     const { startScan, cancelScan, isScanning, progress, error } = useScan();
     const { scanTree, reset, currentPath } = useScanStore();
+    const [isElevated, setIsElevated] = useState<boolean | null>(null);
+    const [showElevationDialog, setShowElevationDialog] = useState(false);
+    const [elevateLoading, setElevateLoading] = useState(false);
     const [targetPath, setTargetPath] = useState<string | null>(null);
     const [pathInput, setPathInput] = useState("");
     const [showPathInput, setShowPathInput] = useState(false);
@@ -37,7 +43,58 @@ export function MainWorkspace() {
     const [showHistory, setShowHistory] = useState(false);
     const [showCleanup, setShowCleanup] = useState(false);
     const [compareData, setCompareData] = useState<ScanDiff | null>(null);
+    const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+    const [dragHighlight, setDragHighlight] = useState(false);
     const addToast = useToastStore(s => s.addToast);
+
+    useEffect(() => {
+        let mounted = true;
+        (async () => {
+            try {
+                const status = await invoke<{ is_elevated: boolean }>("get_privilege_status");
+                if (!mounted) return;
+                setIsElevated(status.is_elevated);
+                setShowElevationDialog(!status.is_elevated);
+            } catch {
+                if (!mounted) return;
+                setIsElevated(false);
+            }
+        })();
+        return () => {
+            mounted = false;
+        };
+    }, []);
+
+    useEffect(() => {
+        if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+        let unlisten: (() => void) | undefined;
+        getCurrentWebview()
+            .onDragDropEvent((event) => {
+                const t = event.payload.type;
+                if (t === "enter" || t === "over") setDragHighlight(true);
+                if (t === "leave") setDragHighlight(false);
+                if (t === "drop") {
+                    setDragHighlight(false);
+                    if (isScanning) return;
+                    const paths = event.payload.paths;
+                    const p = paths[0];
+                    if (p) {
+                        if (import.meta.env.DEV) {
+                            console.log("[drag-drop] dropped path:", p);
+                        }
+                        setTargetPath(p);
+                        startScan(p);
+                    }
+                }
+            })
+            .then((u) => {
+                unlisten = u;
+            })
+            .catch(() => {});
+        return () => {
+            unlisten?.();
+        };
+    }, [startScan, isScanning]);
 
     const handleDriveClick = (drive: DriveInfo) => {
         const path = drive.mount_point;
@@ -95,8 +152,12 @@ export function MainWorkspace() {
     // Global keyboard shortcuts (Phase 6)
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
-            // Escape: go back or reset
             if (e.key === "Escape") {
+                if (commandPaletteOpen) {
+                    e.preventDefault();
+                    setCommandPaletteOpen(false);
+                    return;
+                }
                 if (showPathInput) { setShowPathInput(false); return; }
                 if (scanTree && currentPath.length > 1) {
                     useScanStore.getState().setCurrentPath(currentPath.slice(0, -1));
@@ -143,7 +204,7 @@ export function MainWorkspace() {
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [showPathInput, scanTree, currentPath, showDashboard]);
+    }, [showPathInput, scanTree, currentPath, showDashboard, commandPaletteOpen]);
 
     if (error) {
         return (
@@ -171,6 +232,37 @@ export function MainWorkspace() {
 
     return (
         <div className="flex flex-col h-full w-full relative overflow-hidden">
+            {dragHighlight && !isScanning && (
+                <div className="fixed inset-0 z-[60] pointer-events-none flex items-center justify-center border-4 border-dashed border-primary bg-primary/15 backdrop-blur-sm">
+                    <div className="text-center space-y-1 px-6 py-4 rounded-2xl bg-background/90 border-2 border-primary shadow-lg max-w-sm">
+                        <p className="text-lg font-bold text-primary">Drop to scan</p>
+                        <p className="text-sm text-muted-foreground">Release the mouse to scan that folder</p>
+                    </div>
+                </div>
+            )}
+
+            <CommandPalette
+                open={commandPaletteOpen}
+                onOpenChange={setCommandPaletteOpen}
+                onOpenExport={() => setShowExport(true)}
+                onToggleDuplicates={() => setShowDuplicates((v) => !v)}
+                onToggleDashboard={() => setShowDashboard((v) => !v)}
+                onFocusSearch={() => {
+                    const el = document.querySelector('input[placeholder="Filter items… (Ctrl+F)"]') as HTMLInputElement | null;
+                    el?.focus();
+                }}
+                onOpenCustomPath={() => {
+                    setShowPathInput(true);
+                    setShowDashboard(false);
+                }}
+                onNewScan={handleReset}
+                onOpenHistory={() => setShowHistory(true)}
+                duplicatesOpen={showDuplicates}
+                dashboardVisible={showDashboard}
+            />
+
+            <SelectionActionBar />
+
             <AnimatePresence mode="wait">
                 {isScanning ? (
                     <ScanProgress
@@ -201,6 +293,11 @@ export function MainWorkspace() {
                                                 {scanTree.name}
                                             </h2>
                                         </div>
+                                        {isElevated === false && (
+                                            <div className="text-[11px] text-muted-foreground">
+                                                Standard scan mode — MFT Turbo available if you run elevated.
+                                            </div>
+                                        )}
                                     </div>
 
                                     <ScanSummary tree={scanTree} />
@@ -320,6 +417,28 @@ export function MainWorkspace() {
                     setShowCancelModal(false);
                 }}
                 onCancel={() => setShowCancelModal(false)}
+            />
+
+            <ConfirmModal
+                isOpen={showElevationDialog}
+                title="Run elevated?"
+                message="Elevated mode enables faster MFT scanning on Windows root drives. Run elevated now?"
+                confirmLabel="Run Elevated"
+                cancelLabel="Continue Standard"
+                variant="info"
+                isLoading={elevateLoading}
+                onConfirm={async () => {
+                    try {
+                        setElevateLoading(true);
+                        await invoke("relaunch_as_admin");
+                    } catch (err: any) {
+                        addToast("error", `Failed to relaunch elevated: ${err}`);
+                        setShowElevationDialog(false);
+                    } finally {
+                        setElevateLoading(false);
+                    }
+                }}
+                onCancel={() => setShowElevationDialog(false)}
             />
 
             <AnimatePresence>
