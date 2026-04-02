@@ -24,6 +24,18 @@ export function ToastProvider() {
                             {toast.type === "warning" && <AlertTriangle size={18} className="text-amber-500 shrink-0" />}
                             <p className="text-sm text-popover-foreground">{toast.message}</p>
                         </div>
+                        {toast.action && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    toast.action?.onClick();
+                                    removeToast(toast.id);
+                                }}
+                                className="shrink-0 text-xs font-semibold text-primary hover:underline px-2"
+                            >
+                                {toast.action.label}
+                            </button>
+                        )}
                         <button
                             onClick={() => removeToast(toast.id)}
                             className="text-muted-foreground hover:text-foreground transition-colors p-1"

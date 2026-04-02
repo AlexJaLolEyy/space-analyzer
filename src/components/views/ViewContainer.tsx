@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search, CircleDashed } from "lucide-react";
 import { useMemo } from "react";
-import { useScanStore } from "../../stores/scanStore";
+import { findNodeByPath, useScanStore } from "../../stores/scanStore";
 import { BarChartView } from "./BarChartView";
 import { ListView } from "./ListView";
 import { PieChartView } from "./PieChartView";
@@ -17,13 +17,16 @@ const VIEW_BUTTONS = [
 ];
 
 export function ViewContainer() {
-    const {
-        currentNode, currentPath,
-        viewMode, setViewMode,
-        searchQuery, setSearchQuery,
-        categoryFilter, setCategoryFilter,
-        setCurrentPath,
-    } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const currentPath = useScanStore((s) => s.currentPath);
+    const currentNode = useScanStore((s) => findNodeByPath(s.scanTree, s.currentPath) ?? s.scanTree);
+    const viewMode = useScanStore((s) => s.viewMode);
+    const setViewMode = useScanStore((s) => s.setViewMode);
+    const searchQuery = useScanStore((s) => s.searchQuery);
+    const setSearchQuery = useScanStore((s) => s.setSearchQuery);
+    const categoryFilter = useScanStore((s) => s.categoryFilter);
+    const setCategoryFilter = useScanStore((s) => s.setCategoryFilter);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
 
     const filteredNode = useMemo(() => {
         if (!currentNode) return null;
@@ -40,7 +43,7 @@ export function ViewContainer() {
 
     const canGoBack = currentPath.length > 1;
 
-    if (!currentNode || !filteredNode) {
+    if (!scanTree || !currentNode || !filteredNode) {
         return (
             <div className="flex-1 flex items-center justify-center text-muted-foreground">
                 No data to display. Please run a scan.
