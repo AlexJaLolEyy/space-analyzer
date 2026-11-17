@@ -1,7 +1,10 @@
+import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search, CircleDashed } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
+import type { ScanNode, SearchHit } from "../../types/scan";
+import { ViewChartErrorBoundary } from "../ui/ViewChartErrorBoundary";
 import { BarChartView } from "./BarChartView";
 import { ListView } from "./ListView";
 import { PieChartView } from "./PieChartView";
@@ -16,10 +19,25 @@ const VIEW_BUTTONS = [
     { id: "sunburst" as const, label: "Sunburst", icon: <CircleDashed size={15} /> },
 ];
 
+function hitToScanNode(h: SearchHit): ScanNode {
+    return {
+        name: h.name,
+        path: h.path,
+        size: h.size,
+        is_dir: h.is_dir,
+        children: [],
+        file_count: h.file_count,
+        category: h.category,
+        last_modified: h.last_modified,
+        protected: h.protected,
+    };
+}
+
 export function ViewContainer() {
     const scanTree = useScanStore((s) => s.scanTree);
     const currentPath = useScanStore((s) => s.currentPath);
     const currentNode = useScanStore((s) => findNodeByPath(s.scanTree, s.currentPath) ?? s.scanTree);
+    const mergeChildren = useScanStore((s) => s.mergeChildren);
     const viewMode = useScanStore((s) => s.viewMode);
     const setViewMode = useScanStore((s) => s.setViewMode);
     const searchQuery = useScanStore((s) => s.searchQuery);
@@ -28,22 +46,95 @@ export function ViewContainer() {
     const setCategoryFilter = useScanStore((s) => s.setCategoryFilter);
     const setCurrentPath = useScanStore((s) => s.setCurrentPath);
 
-    const filteredNode = useMemo(() => {
-        if (!currentNode) return null;
-        let children = currentNode.children;
-        if (searchQuery) {
-            const query = searchQuery.toLowerCase();
-            children = children.filter(c => c.name.toLowerCase().includes(query));
+    const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
+    const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const trimmedQuery = searchQuery.trim();
+
+    useEffect(() => {
+        if (!scanTree) {
+            setSearchHits([]);
+            return;
         }
+        if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        if (!trimmedQuery) {
+            setSearchHits([]);
+            return;
+        }
+        searchDebounceRef.current = setTimeout(() => {
+            void (async () => {
+                try {
+                    const hits = await invoke<SearchHit[]>("search_nodes", {
+                        query: trimmedQuery,
+                        maxResults: 500,
+                    });
+                    setSearchHits(hits);
+                } catch (e) {
+                    console.error("search_nodes failed:", e);
+                    setSearchHits([]);
+                }
+            })();
+        }, 280);
+        return () => {
+            if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+        };
+    }, [trimmedQuery, scanTree]);
+
+    useEffect(() => {
+        if (!scanTree || !currentNode?.is_dir) return;
+        if (currentNode.children.length > 0) return;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const ch = await invoke<ScanNode[]>("get_children", {
+                    path: currentNode.path,
+                    childDepth: 2,
+                });
+                if (!cancelled) mergeChildren(currentNode.path, ch);
+            } catch (e) {
+                console.error("get_children failed:", e);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [scanTree, currentNode?.path, currentNode?.is_dir, currentNode?.children.length, mergeChildren]);
+
+    const chartNode = useMemo(() => {
+        if (!currentNode) return null;
+        if (categoryFilter === "all") return currentNode;
+        const children = currentNode.children.filter((c) => c.category === categoryFilter || c.is_dir);
+        return { ...currentNode, children };
+    }, [currentNode, categoryFilter]);
+
+    const listVirtualNode = useMemo((): ScanNode | null => {
+        if (!currentNode || !scanTree) return null;
+        if (trimmedQuery) {
+            const children = searchHits.map(hitToScanNode);
+            return {
+                ...currentNode,
+                name: "Search results",
+                path: "__search__",
+                children,
+                size: children.reduce((a, c) => a + c.size, 0),
+                is_dir: true,
+                file_count: children.reduce((a, c) => a + c.file_count, 0),
+                category: currentNode.category,
+                last_modified: currentNode.last_modified,
+                protected: false,
+            };
+        }
+        let children = currentNode.children;
         if (categoryFilter !== "all") {
-            children = children.filter(c => c.category === categoryFilter || c.is_dir);
+            children = children.filter((c) => c.category === categoryFilter || c.is_dir);
         }
         return { ...currentNode, children };
-    }, [currentNode, searchQuery, categoryFilter]);
+    }, [currentNode, scanTree, trimmedQuery, searchHits, categoryFilter]);
 
+    const filteredNode = listVirtualNode;
     const canGoBack = currentPath.length > 1;
 
-    if (!scanTree || !currentNode || !filteredNode) {
+    if (!scanTree || !currentNode || !filteredNode || !chartNode) {
         return (
             <div className="flex-1 flex items-center justify-center text-muted-foreground">
                 No data to display. Please run a scan.
@@ -53,9 +144,7 @@ export function ViewContainer() {
 
     return (
         <div className="flex-1 flex flex-col w-full h-full overflow-hidden">
-            {/* Toolbar */}
             <div className="flex items-center gap-3 px-4 py-2.5 border-b border-border/50 bg-background/40 flex-wrap shrink-0">
-                {/* View mode tabs */}
                 <div className="flex gap-1 p-1 bg-secondary rounded-lg">
                     {VIEW_BUTTONS.map((btn, index) => (
                         <button
@@ -72,7 +161,6 @@ export function ViewContainer() {
                     ))}
                 </div>
 
-                {/* Breadcrumb nav */}
                 <div className="flex items-center gap-1 text-xs text-muted-foreground overflow-hidden flex-1 min-w-0">
                     {canGoBack && (
                         <button
@@ -111,7 +199,6 @@ export function ViewContainer() {
                     })}
                 </div>
 
-                {/* Category Filter */}
                 <select
                     value={categoryFilter}
                     onChange={(e) => setCategoryFilter(e.target.value as any)}
@@ -132,20 +219,18 @@ export function ViewContainer() {
                     <option value="Unknown">Others</option>
                 </select>
 
-                {/* Search */}
                 <div className="flex items-center gap-2 bg-secondary/60 px-3 py-1.5 rounded-lg border border-border/60 focus-within:ring-2 focus-within:ring-ring w-52 transition-shadow shrink-0">
                     <Search size={13} className="text-muted-foreground shrink-0" />
                     <input
                         type="text"
-                        placeholder="Filter items… (Ctrl+F)"
+                        placeholder="Search tree… (Ctrl+F)"
                         value={searchQuery}
-                        onChange={e => setSearchQuery(e.target.value)}
+                        onChange={(e) => setSearchQuery(e.target.value)}
                         className="bg-transparent border-none outline-none text-xs w-full placeholder:text-muted-foreground"
                     />
                 </div>
             </div>
 
-            {/* Main View Area */}
             <AnimatePresence mode="wait">
                 <motion.div
                     key={viewMode}
@@ -155,11 +240,27 @@ export function ViewContainer() {
                     transition={{ type: "spring", stiffness: 300, damping: 30 }}
                     className="flex-1 overflow-hidden relative glass m-3 mb-2 rounded-xl flex flex-col min-h-0"
                 >
-                    {viewMode === "list" && <ListView node={filteredNode} />}
-                    {viewMode === "pie" && <PieChartView node={filteredNode} />}
-                    {viewMode === "bar" && <BarChartView node={filteredNode} />}
-                    {viewMode === "treemap" && <TreemapView node={filteredNode} />}
-                    {viewMode === "sunburst" && <SunburstView node={filteredNode} />}
+                    {viewMode === "list" && <ListView node={filteredNode} searchMode={!!trimmedQuery} />}
+                    {viewMode === "pie" && (
+                        <ViewChartErrorBoundary label="Pie chart">
+                            <PieChartView node={chartNode} />
+                        </ViewChartErrorBoundary>
+                    )}
+                    {viewMode === "bar" && (
+                        <ViewChartErrorBoundary label="Bar chart">
+                            <BarChartView node={chartNode} />
+                        </ViewChartErrorBoundary>
+                    )}
+                    {viewMode === "treemap" && (
+                        <ViewChartErrorBoundary label="Treemap">
+                            <TreemapView node={chartNode} />
+                        </ViewChartErrorBoundary>
+                    )}
+                    {viewMode === "sunburst" && (
+                        <ViewChartErrorBoundary label="Sunburst">
+                            <SunburstView node={chartNode} />
+                        </ViewChartErrorBoundary>
+                    )}
                 </motion.div>
             </AnimatePresence>
         </div>

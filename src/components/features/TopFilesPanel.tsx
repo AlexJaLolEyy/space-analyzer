@@ -1,6 +1,7 @@
+import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { ArrowUpDown, FileText, Search, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
@@ -10,27 +11,37 @@ interface TopFilesPanelProps {
     onClose: () => void;
 }
 
-// Flatten all files recursively from the scan tree
-function collectFiles(node: ScanNode, files: ScanNode[] = []): ScanNode[] {
-    if (!node.is_dir) {
-        files.push(node);
-    }
-    for (const child of node.children) {
-        collectFiles(child, files);
-    }
-    return files;
+function parentDir(p: string): string {
+    const norm = p.replace(/[/\\]+$/, "");
+    const i = Math.max(norm.lastIndexOf("\\"), norm.lastIndexOf("/"));
+    if (i <= 0) return norm;
+    return norm.slice(0, i);
 }
 
 export function TopFilesPanel({ onClose }: TopFilesPanelProps) {
-    const { scanTree, setCurrentPath } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const navigateToAbsolutePath = useScanStore((s) => s.navigateToAbsolutePath);
     const [query, setQuery] = useState("");
+    const [topFiles, setTopFiles] = useState<ScanNode[]>([]);
 
-    const topFiles = useMemo(() => {
-        if (!scanTree) return [];
-        const all = collectFiles(scanTree);
-        return all
-            .sort((a, b) => b.size - a.size)
-            .slice(0, 100);
+    useEffect(() => {
+        if (!scanTree) {
+            setTopFiles([]);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const rows = await invoke<ScanNode[]>("get_top_files", { n: 100 });
+                if (!cancelled) setTopFiles(rows);
+            } catch (e) {
+                console.error("get_top_files failed:", e);
+                if (!cancelled) setTopFiles([]);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
     }, [scanTree]);
 
     const filtered = useMemo(() => {
@@ -40,14 +51,7 @@ export function TopFilesPanel({ onClose }: TopFilesPanelProps) {
     }, [topFiles, query]);
 
     const navigateToFile = (file: ScanNode) => {
-        // Navigate to the parent folder of this file
-        const parts = file.path.replace(/\\/g, "/").split("/");
-        parts.pop(); // remove filename
-        const pathSegments = parts.filter(Boolean);
-        // Use the root + relative segments
-        if (pathSegments.length > 0) {
-            setCurrentPath([pathSegments[0] + "\\", ...pathSegments.slice(1)]);
-        }
+        navigateToAbsolutePath(parentDir(file.path));
         onClose();
     };
 

@@ -10,7 +10,8 @@ interface PieChartViewProps {
 }
 
 export function PieChartView({ node }: PieChartViewProps) {
-    const { currentPath, setCurrentPath } = useScanStore();
+    const currentPath = useScanStore((s) => s.currentPath);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
     const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined);
 
     const data = useMemo(() => {
@@ -29,6 +30,7 @@ export function PieChartView({ node }: PieChartViewProps) {
                 path: "",
                 file_count: 0,
                 last_modified: null,
+                protected: false,
             } as ScanNode);
         }
         return top;

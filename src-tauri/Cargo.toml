@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
+default-run = "space-analyzer"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,6 +15,14 @@ edition = "2021"
 name = "space_analyzer_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "space-analyzer"
+path = "src/main.rs"
+
+[[bin]]
+name = "scan_bench"
+path = "src/bin/scan_bench.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
@@ -23,10 +32,27 @@ tauri-plugin-opener = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.38.2"
-jwalk = "0.8.1"
-windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 trash = "5"
 flate2 = "1"
 uuid = { version = "1", features = ["v4"] }
 chrono = "0.4"
+tauri-plugin-dialog = "2.6.0"
+tauri-plugin-fs = "2.4.5"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+rayon = "1.11.0"
+memchr = "2"
+thiserror = "2"
 
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# Dependencies are optimized even in dev builds so `tauri dev` is not misleadingly slow.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

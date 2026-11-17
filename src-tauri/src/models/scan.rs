@@ -11,4 +11,6 @@ pub struct ScanNode {
     pub file_count: u64,
     pub category: FileCategory,
     pub last_modified: Option<u64>,
+    #[serde(default)]
+    pub protected: bool,
 }

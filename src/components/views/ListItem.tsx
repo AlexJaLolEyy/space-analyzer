@@ -1,5 +1,4 @@
-import { motion } from "framer-motion";
-import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, Trash2, Video } from "lucide-react";
+import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, ShieldAlert, Trash2, Video } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
@@ -8,6 +7,8 @@ import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 import type { FileCategory, ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
+
+export const LIST_ROW_HEIGHT = 60;
 
 interface ListItemProps {
     node: ScanNode;
@@ -49,7 +50,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const color = getCategoryColor(node.category);
     const extBadge = !isDir ? getExtBadge(node.name) : null;
 
-    const { addToast } = useToastStore();
+    const addToast = useToastStore((s) => s.addToast);
     const removeNode = useScanStore((s) => s.removeNode);
     const restoreRemovedNode = useScanStore((s) => s.restoreRemovedNode);
 
@@ -57,6 +58,8 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const [deleteConfig, setDeleteConfig] = useState<{ mode: "recycle" | "permanent"; open: boolean }>({ mode: "recycle", open: false });
 
     const isSynthetic = node.path.includes(".space-analyzer");
+    const isProtected = node.protected === true;
+    const isBlockedDelete = isSynthetic || isProtected;
 
     const MENU_W = 168;
     const MENU_H = 140;
@@ -94,8 +97,11 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const handleDeleteClick = (mode: "recycle" | "permanent", e: React.MouseEvent) => {
         e.stopPropagation();
         handleCloseMenu();
-        if (isSynthetic) {
-            addToast("warning", "This aggregate entry cannot be deleted.");
+        if (isBlockedDelete) {
+            addToast(
+                "warning",
+                isProtected ? "System-protected file — deletion disabled." : "This aggregate entry cannot be deleted."
+            );
             return;
         }
         setDeleteConfig({ mode, open: true });
@@ -115,23 +121,27 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
 
     return (
         <>
-            <motion.div
+            <div
                 ref={rowRef}
                 onClick={(e) => onActivate(node, e)}
                 onContextMenu={handleContextMenu}
-                whileHover={{ x: 4 }}
-                transition={{ type: "spring", stiffness: 400, damping: 30 }}
                 data-list-row="1"
-                className={`flex items-center justify-between p-3 border-b border-border/50 hover:bg-muted/50 cursor-pointer transition-colors group relative outline-none ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : ""
+                style={{ height: LIST_ROW_HEIGHT }}
+                className={`flex items-center justify-between px-3 border-b border-border/50 hover:bg-muted/50 cursor-pointer transition-colors group relative outline-none ${isSelected ? "bg-primary/10 ring-1 ring-inset ring-primary/30" : ""
                     } ${isFocused ? "ring-2 ring-inset ring-ring" : ""}`}
             >
                 <div className="flex items-center gap-3 overflow-hidden">
                     <div className="shrink-0">
                         {getCategoryIcon(node.category, isDir, color)}
                     </div>
-                    <div className="truncate">
-                        <p className="text-sm font-medium truncate" title={node.name}>
-                            {node.name}
+                    <div className="truncate min-w-0">
+                        <p className="text-sm font-medium truncate flex items-center gap-1.5" title={node.name}>
+                            {isProtected && (
+                                <span title="System-protected file — deletion disabled" className="shrink-0 inline-flex">
+                                    <ShieldAlert size={14} className="text-amber-500" aria-hidden />
+                                </span>
+                            )}
+                            <span className="truncate">{node.name}</span>
                         </p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
                             {isDir ? (
@@ -172,16 +182,20 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                     <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
                         <button
                             type="button"
-                            disabled={isSynthetic}
+                            disabled={isBlockedDelete}
                             onClick={(e) => handleDeleteClick("recycle", e)}
-                            title="Move to Recycle Bin"
+                            title={
+                                isProtected
+                                    ? "System-protected file — deletion disabled"
+                                    : "Move to Recycle Bin"
+                            }
                             className="p-1 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors disabled:opacity-30"
                         >
                             <Trash2 size={13} />
                         </button>
                     </div>
                 </div>
-            </motion.div>
+            </div>
 
             {menuPos && (
                 <>
@@ -209,7 +223,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                         <div className="h-px bg-border my-1" />
                         <button
                             type="button"
-                            disabled={isSynthetic}
+                            disabled={isBlockedDelete}
                             className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors text-amber-500 disabled:opacity-40"
                             onClick={(e) => handleDeleteClick("recycle", e)}
                         >
@@ -217,7 +231,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                         </button>
                         <button
                             type="button"
-                            disabled={isSynthetic}
+                            disabled={isBlockedDelete}
                             className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-destructive rounded-lg transition-colors text-destructive disabled:opacity-40"
                             onClick={(e) => handleDeleteClick("permanent", e)}
                         >

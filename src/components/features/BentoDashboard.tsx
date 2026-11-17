@@ -1,17 +1,17 @@
+import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
-import { GaugeChart } from "../ui/GaugeChart";
-import { useScanStore } from "../../stores/scanStore";
-import { formatBytes } from "../../lib/format";
+import { useEffect, useState } from "react";
+import { ArrowRight, Box, File, FolderOutput, HardDrive } from "lucide-react";
 import { getCategoryColor } from "../../lib/colors";
-import { ArrowRight, Box, HardDrive, File, FolderOutput } from "lucide-react";
+import { formatBytes } from "../../lib/format";
+import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
+import { GaugeChart } from "../ui/GaugeChart";
+import type { Variants } from "framer-motion";
 
 interface BentoDashboardProps {
     onExplore: () => void;
 }
-
-import { useMemo } from "react";
-import type { Variants } from "framer-motion";
 
 const containerVariants: Variants = {
     hidden: { opacity: 0 },
@@ -28,58 +28,42 @@ const cardVariants: Variants = {
     show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 25 } },
 };
 
+interface DashboardStatsPayload {
+    top_categories: { category: string; size: number }[];
+    largest_file: ScanNode | null;
+    top_dirs: ScanNode[];
+    total_file_count: number;
+    total_size: number;
+}
+
 export function BentoDashboard({ onExplore }: BentoDashboardProps) {
-    const { scanTree, selectedDrive } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const selectedDrive = useScanStore((s) => s.selectedDrive);
+    const [stats, setStats] = useState<DashboardStatsPayload | null>(null);
 
-    interface ScanStats {
-        topTypes: { category: string; size: number }[];
-        largestFile: ScanNode | null;
-        topDirs: ScanNode[];
-    }
-
-    const stats = useMemo<ScanStats | null>(() => {
-        if (!scanTree) return null;
-
-        const types: Record<string, number> = {};
-        let largest: ScanNode | null = null;
-
-        // Optimized traverse - only go deep if needed or limit total visits
-        const traverse = (n: ScanNode, depth: number) => {
-            if (!n.is_dir) {
-                if (n.size > 0) {
-                    types[n.category] = (types[n.category] || 0) + n.size;
-                }
-                if (!largest || n.size > largest.size) {
-                    largest = n;
-                }
+    useEffect(() => {
+        if (!scanTree) {
+            setStats(null);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const data = await invoke<DashboardStatsPayload>("get_dashboard_stats");
+                if (!cancelled) setStats(data);
+            } catch (e) {
+                console.error("get_dashboard_stats failed:", e);
+                if (!cancelled) setStats(null);
             }
-
-            // Limit recursion depth for dashboard summary to keep UI responsive
-            if (depth < 5) { // Further limit depth for safety
-                for (let i = 0; i < n.children.length; i++) {
-                    traverse(n.children[i], depth + 1);
-                }
-            }
+        })();
+        return () => {
+            cancelled = true;
         };
-
-        traverse(scanTree, 0);
-
-        const topTypes = Object.entries(types)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([category, size]) => ({ category, size }));
-
-        const topDirs = [...scanTree.children]
-            .filter(c => c.is_dir)
-            .sort((a, b) => b.size - a.size)
-            .slice(0, 3);
-
-        return { topTypes, largestFile: largest, topDirs };
     }, [scanTree]);
 
     if (!scanTree || !stats) return null;
 
-    const { topTypes, largestFile, topDirs } = stats;
+    const { top_categories, largest_file, top_dirs } = stats;
     const totalCapacity = selectedDrive?.total_bytes || (scanTree.size * 1.1);
 
     return (
@@ -91,8 +75,6 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
             className="flex-1 w-full max-w-5xl mx-auto p-6 md:p-8 overflow-y-auto no-scrollbar pb-24"
         >
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 auto-rows-[minmax(140px,auto)]">
-
-                {/* Large Main Status Card */}
                 <motion.div variants={cardVariants} className="md:col-span-2 row-span-2 bg-linear-to-br from-background/80 to-secondary/30 border border-border/50 rounded-3xl p-6 shadow-sm flex flex-col justify-between relative overflow-hidden group">
                     <div className="absolute top-0 right-0 w-64 h-64 bg-primary/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3" />
 
@@ -105,9 +87,9 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                     </div>
 
                     <div className="flex items-center gap-6 mt-auto relative z-10">
-                        <GaugeChart used={scanTree.size} total={totalCapacity} />
+                        <GaugeChart used={stats.total_size} total={totalCapacity} />
                         <div className="flex flex-col gap-1">
-                            <span className="text-2xl font-bold">{formatBytes(scanTree.size)}</span>
+                            <span className="text-2xl font-bold">{formatBytes(stats.total_size)}</span>
                             <span className="text-sm text-muted-foreground whitespace-nowrap">
                                 of {formatBytes(totalCapacity)} capacity
                             </span>
@@ -125,27 +107,39 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                     </button>
                 </motion.div>
 
-                {/* Top Directories */}
                 <motion.div variants={cardVariants} className="row-span-2 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col space-y-4">
-                    <h3 className="font-semibold flex items-center gap-2"><FolderOutput size={16} className="text-primary" /> Top Directories</h3>
+                    <h3 className="font-semibold flex items-center gap-2">
+                        <FolderOutput size={16} className="text-primary" /> Top Directories
+                    </h3>
                     <div className="flex-1 flex flex-col gap-3">
-                        {topDirs.map(dir => (
-                            <div key={dir.name} className="flex justify-between items-center text-sm p-2 rounded-lg bg-background/40 border border-border/20">
-                                <span className="truncate flex-1 font-medium mr-2" title={dir.name}>{dir.name}</span>
-                                <span className="font-mono text-xs bg-primary/10 text-primary px-2 py-0.5 rounded shrink-0">{formatBytes(dir.size)}</span>
+                        {top_dirs.map((dir) => (
+                            <div
+                                key={dir.path}
+                                className="flex justify-between items-center text-sm p-2 rounded-lg bg-background/40 border border-border/20"
+                            >
+                                <span className="truncate flex-1 font-medium mr-2" title={dir.name}>
+                                    {dir.name}
+                                </span>
+                                <span className="font-mono text-xs bg-primary/10 text-primary px-2 py-0.5 rounded shrink-0">
+                                    {formatBytes(dir.size)}
+                                </span>
                             </div>
                         ))}
                     </div>
                 </motion.div>
 
-                {/* Top File Types */}
                 <motion.div variants={cardVariants} className="md:col-span-1 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col">
-                    <h3 className="font-semibold flex items-center gap-2 mb-4"><Box size={16} className="text-primary" /> Space by Type</h3>
+                    <h3 className="font-semibold flex items-center gap-2 mb-4">
+                        <Box size={16} className="text-primary" /> Space by Type
+                    </h3>
                     <div className="space-y-3">
-                        {topTypes.map(t => (
+                        {top_categories.map((t) => (
                             <div key={t.category} className="flex items-center justify-between">
                                 <div className="flex items-center gap-2">
-                                    <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: getCategoryColor(t.category as any) }} />
+                                    <div
+                                        className="w-2.5 h-2.5 rounded-full"
+                                        style={{ backgroundColor: getCategoryColor(t.category as any) }}
+                                    />
                                     <span className="text-sm">{t.category}</span>
                                 </div>
                                 <span className="font-mono text-xs">{formatBytes(t.size)}</span>
@@ -154,25 +148,26 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                     </div>
                 </motion.div>
 
-                {/* File Count */}
                 <motion.div variants={cardVariants} className="md:col-span-1 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col justify-center gap-1">
                     <p className="text-sm text-muted-foreground">Total Files Indexed</p>
-                    <p className="text-3xl font-bold font-mono tracking-tighter">{scanTree.file_count.toLocaleString()}</p>
+                    <p className="text-3xl font-bold font-mono tracking-tighter">{stats.total_file_count.toLocaleString()}</p>
                 </motion.div>
 
-                {/* Largest Single File */}
                 <motion.div variants={cardVariants} className="md:col-span-1 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col justify-center">
-                    <p className="text-sm text-muted-foreground flex items-center gap-1.5 mb-1"><File size={14} /> Largest File</p>
-                    {largestFile ? (
+                    <p className="text-sm text-muted-foreground flex items-center gap-1.5 mb-1">
+                        <File size={14} /> Largest File
+                    </p>
+                    {largest_file ? (
                         <>
-                            <p className="text-sm font-semibold truncate" title={largestFile.name}>{largestFile.name}</p>
-                            <p className="text-xs text-primary font-mono mt-0.5">{formatBytes(largestFile.size)}</p>
+                            <p className="text-sm font-semibold truncate" title={largest_file.name}>
+                                {largest_file.name}
+                            </p>
+                            <p className="text-xs text-primary font-mono mt-0.5">{formatBytes(largest_file.size)}</p>
                         </>
                     ) : (
                         <p className="text-sm text-muted">No files found</p>
                     )}
                 </motion.div>
-
             </div>
         </motion.div>
     );

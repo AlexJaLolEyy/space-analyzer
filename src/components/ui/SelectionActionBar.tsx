@@ -3,20 +3,10 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { Download, Trash2, X } from "lucide-react";
 import { useState } from "react";
-import { useScanStore } from "../../stores/scanStore";
+import { findNodeByAbsolutePath, useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 import type { ScanNode } from "../../types/scan";
 import { ConfirmModal } from "./ConfirmModal";
-
-function collectNodesByPaths(root: ScanNode, paths: Set<string>): ScanNode[] {
-    const out: ScanNode[] = [];
-    function walk(n: ScanNode) {
-        if (paths.has(n.path)) out.push(n);
-        for (const c of n.children) walk(c);
-    }
-    walk(root);
-    return out;
-}
 
 export function SelectionActionBar() {
     const scanTree = useScanStore((s) => s.scanTree);
@@ -31,12 +21,27 @@ export function SelectionActionBar() {
 
     if (!scanTree || selectedPaths.length === 0) return null;
 
-    const paths = new Set(selectedPaths);
     const blocked = selectedPaths.filter((p) => p.includes(".space-analyzer"));
-    const deletable = selectedPaths.filter((p) => !blocked.includes(p));
+    const systemProtected = selectedPaths.filter((p) => findNodeByAbsolutePath(scanTree, p)?.protected === true);
+    const deletable = selectedPaths.filter(
+        (p) => !blocked.includes(p) && !systemProtected.includes(p)
+    );
 
     const exportSelected = async () => {
-        const nodes = collectNodesByPaths(scanTree, paths);
+        const nodes: ScanNode[] = [];
+        for (const p of deletable) {
+            try {
+                const sub = await invoke<ScanNode>("get_export_subtree", { path: p });
+                nodes.push(sub);
+            } catch {
+                try {
+                    const info = await invoke<ScanNode>("get_node_info", { path: p });
+                    nodes.push(info);
+                } catch {
+                    /* skip */
+                }
+            }
+        }
         if (nodes.length === 0) return;
         const json = JSON.stringify(nodes, null, 2);
         try {
@@ -75,9 +80,12 @@ export function SelectionActionBar() {
                 <span className="text-sm font-medium text-foreground pr-2 border-r border-border">
                     {selectedPaths.length} selected
                 </span>
-                {blocked.length > 0 && (
-                    <span className="text-xs text-amber-600 max-w-40 truncate" title="Some entries cannot be deleted">
-                        {blocked.length} protected
+                {(blocked.length > 0 || systemProtected.length > 0) && (
+                    <span
+                        className="text-xs text-amber-600 max-w-48 truncate"
+                        title="Synthetic or system-protected entries cannot be deleted from here"
+                    >
+                        {blocked.length + systemProtected.length} skipped
                     </span>
                 )}
                 <button

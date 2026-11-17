@@ -1,10 +1,8 @@
-use crate::models::{
-    duplicate::{DuplicateFile, DuplicateGroup},
-    scan::ScanNode,
-};
+use crate::errors::AppError;
+use crate::models::duplicate::{DuplicateFile, DuplicateGroup};
+use crate::scan_session::ScanSession;
 use rayon::prelude::*;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -15,6 +13,9 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 use tauri::{command, AppHandle, Emitter, State};
+use xxhash_rust::xxh3::Xxh3;
+
+const DEFAULT_MIN_SIZE: u64 = 1024 * 1024;
 
 #[derive(Clone, Serialize)]
 pub struct DuplicateProgress {
@@ -34,275 +35,187 @@ struct FileEntry {
     size: u64,
 }
 
-fn collect_files(node: &ScanNode, out: &mut Vec<FileEntry>) {
-    if !node.is_dir && node.size > 0 {
-        out.push(FileEntry {
-            name: node.name.clone(),
-            path: node.path.clone(),
-            size: node.size,
-        });
-    }
-    for child in &node.children {
-        collect_files(child, out);
-    }
-}
-
-fn compute_partial_hash(path: &str) -> Result<String, String> {
+fn partial_hash(path: &str) -> Result<u128, String> {
     const CHUNK: u64 = 4096;
     let mut file = File::open(path).map_err(|e| e.to_string())?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
-    let mut hasher = Sha256::new();
+    let mut h = Xxh3::new();
     if len <= CHUNK * 2 {
         let mut buf = Vec::new();
         file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
-        hasher.update(&buf);
+        h.update(&buf);
     } else {
         let mut buf = vec![0u8; CHUNK as usize];
         file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        hasher.update(&buf);
-        let seek_pos = len.saturating_sub(CHUNK);
-        file.seek(SeekFrom::Start(seek_pos)).map_err(|e| e.to_string())?;
-        let to_read = (len - seek_pos) as usize;
-        buf.resize(to_read.max(1), 0);
+        h.update(&buf);
+        file.seek(SeekFrom::Start(len - CHUNK)).map_err(|e| e.to_string())?;
         file.read_exact(&mut buf).map_err(|e| e.to_string())?;
-        hasher.update(&buf);
+        h.update(&buf);
+        // middle sample as well
+        file.seek(SeekFrom::Start(len / 2 - CHUNK / 2)).map_err(|e| e.to_string())?;
+        file.read_exact(&mut buf).map_err(|e| e.to_string())?;
+        h.update(&buf);
     }
-    hasher.update(len.to_le_bytes());
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect())
+    h.update(&len.to_le_bytes());
+    Ok(h.digest128())
 }
 
-fn compute_full_hash(path: &str) -> Result<String, String> {
+fn full_hash(path: &str, cancel: &AtomicBool) -> Result<u128, String> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 256 * 1024];
+    let mut h = Xxh3::new();
+    let mut buf = vec![0u8; 1024 * 1024];
     loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
         let n = file.read(&mut buf).map_err(|e| e.to_string())?;
         if n == 0 {
             break;
         }
-        hasher.update(&buf[..n]);
+        h.update(&buf[..n]);
     }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect())
+    Ok(h.digest128())
 }
 
-fn push_full_hash_groups_parallel(
-    size: u64,
-    candidates: Vec<&FileEntry>,
-    groups_out: &mut Vec<DuplicateGroup>,
-    cancel: &Arc<AtomicBool>,
-    processed_full: &Arc<AtomicU64>,
-) {
-    if candidates.len() < 2 {
-        return;
-    }
-    let pairs: Vec<(String, DuplicateFile)> = candidates
-        .par_iter()
-        .filter_map(|f| {
-            if cancel.load(Ordering::Relaxed) {
-                return None;
-            }
-            match compute_full_hash(&f.path) {
-                Ok(h) => {
-                    processed_full.fetch_add(1, Ordering::Relaxed);
-                    Some((
-                        h,
-                        DuplicateFile {
-                            name: f.name.clone(),
-                            path: f.path.clone(),
-                        },
-                    ))
-                }
-                Err(_) => None,
-            }
-        })
-        .collect();
-
-    if cancel.load(Ordering::Relaxed) {
-        return;
-    }
-
-    let mut fm: HashMap<String, Vec<DuplicateFile>> = HashMap::new();
-    for (h, df) in pairs {
-        fm.entry(h).or_default().push(df);
-    }
-    for (content_hash, file_list) in fm {
-        if file_list.len() > 1 {
-            let wasted = size * (file_list.len() as u64 - 1);
-            groups_out.push(DuplicateGroup {
-                content_hash,
-                size,
-                files: file_list,
-                total_wasted: wasted,
-            });
-        }
-    }
-}
-
-fn process_duplicate_buckets(
-    app: &AppHandle,
-    buckets: Vec<Vec<&FileEntry>>,
-    cancel: &Arc<AtomicBool>,
-    groups_out: &mut Vec<DuplicateGroup>,
-) -> Result<(), String> {
-    if buckets.is_empty() {
-        return Ok(());
-    }
-
-    let total_partial: u64 = buckets.iter().map(|b| b.len() as u64).sum();
-    let processed = Arc::new(AtomicU64::new(0));
+fn spawn_monitor(
+    app: AppHandle,
+    phase: &'static str,
+    processed: Arc<AtomicU64>,
+    total: u64,
+) -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
     let stop = Arc::new(AtomicBool::new(false));
-    let stop_mon = Arc::clone(&stop);
-    let app_m = app.clone();
-    let proc_m = Arc::clone(&processed);
-    let tp = total_partial;
-    let mon = thread::spawn(move || {
-        while !stop_mon.load(Ordering::Relaxed) {
+    let stop_m = Arc::clone(&stop);
+    let handle = thread::spawn(move || {
+        while !stop_m.load(Ordering::Relaxed) {
             thread::sleep(Duration::from_millis(200));
-            let _ = app_m.emit(
+            let _ = app.emit(
                 "duplicate-progress",
                 DuplicateProgress {
-                    phase: "partial_hash".to_string(),
-                    processed: proc_m.load(Ordering::Relaxed),
-                    total: tp,
+                    phase: phase.to_string(),
+                    processed: processed.load(Ordering::Relaxed),
+                    total,
                 },
             );
         }
     });
+    (stop, handle)
+}
 
-    let mut full_jobs: Vec<(u64, Vec<&FileEntry>)> = Vec::new();
+/// Bucket candidate files straight from the arena (paths are only built for bucket members).
+fn collect_buckets(session: &ScanSession, quick_scan: bool, min_size: u64) -> Result<Vec<Vec<FileEntry>>, AppError> {
+    session.with_arena(|a| {
+        let ids: Vec<u32> = (0..a.len() as u32)
+            .into_par_iter()
+            .filter(|&id| a.is_used(id) && !a.is_dir(id) && a.size(id) >= min_size && !a.is_protected(id))
+            .collect();
 
-    for bucket in buckets {
+        let mut groups: HashMap<(u64, Option<String>), Vec<u32>> = HashMap::new();
+        for id in ids {
+            let key = (a.size(id), if quick_scan { Some(a.name(id).to_lowercase()) } else { None });
+            groups.entry(key).or_default().push(id);
+        }
+        Ok(groups
+            .into_values()
+            .filter(|v| v.len() >= 2)
+            .map(|v| {
+                v.into_iter()
+                    .map(|id| FileEntry {
+                        name: a.name(id).to_string(),
+                        path: a.full_path(id),
+                        size: a.size(id),
+                    })
+                    .collect()
+            })
+            .collect())
+    })
+}
+
+fn hash_buckets(
+    app: AppHandle,
+    buckets: Vec<Vec<FileEntry>>,
+    cancel: Arc<AtomicBool>,
+) -> Result<Vec<DuplicateGroup>, AppError> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err(AppError::Cancelled);
+    }
+
+    // 2. partial hashes per size bucket
+    let total_partial: u64 = buckets.iter().map(|b| b.len() as u64).sum();
+    let processed = Arc::new(AtomicU64::new(0));
+    let (stop, mon) = spawn_monitor(app.clone(), "partial_hash", Arc::clone(&processed), total_partial);
+
+    let mut full_jobs: Vec<Vec<&FileEntry>> = Vec::new();
+    for bucket in &buckets {
         if cancel.load(Ordering::Relaxed) {
             stop.store(true, Ordering::Relaxed);
             let _ = mon.join();
-            return Err("Duplicate scan cancelled".to_string());
+            return Err(AppError::Cancelled);
         }
-        let size = bucket[0].size;
-        let partial_rows: Vec<(String, &FileEntry)> = bucket
+        let rows: Vec<(u128, &FileEntry)> = bucket
             .par_iter()
             .filter_map(|f| {
-                compute_partial_hash(&f.path).ok().map(|h| {
-                    processed.fetch_add(1, Ordering::Relaxed);
-                    (h, *f)
-                })
+                let r = partial_hash(&f.path).ok().map(|h| (h, f));
+                processed.fetch_add(1, Ordering::Relaxed);
+                r
             })
             .collect();
-
-        let mut pm: HashMap<String, Vec<&FileEntry>> = HashMap::new();
-        for (h, f) in partial_rows {
+        let mut pm: HashMap<u128, Vec<&FileEntry>> = HashMap::new();
+        for (h, f) in rows {
             pm.entry(h).or_default().push(f);
         }
-        for candidates in pm.into_values() {
-            if candidates.len() >= 2 {
-                full_jobs.push((size, candidates));
-            }
-        }
+        full_jobs.extend(pm.into_values().filter(|c| c.len() >= 2));
     }
-
     stop.store(true, Ordering::Relaxed);
     let _ = mon.join();
 
-    if cancel.load(Ordering::Relaxed) {
-        return Err("Duplicate scan cancelled".to_string());
-    }
+    // 3. full hashes of the remaining candidates
+    let total_full: u64 = full_jobs.iter().map(|c| c.len() as u64).sum();
+    let processed_full = Arc::new(AtomicU64::new(0));
+    let (stop2, mon2) = spawn_monitor(app, "full_hash", Arc::clone(&processed_full), total_full);
 
-    let total_full: u64 = full_jobs.iter().map(|(_, c)| c.len() as u64).sum();
-
-    if total_full > 0 {
-        let processed_full = Arc::new(AtomicU64::new(0));
-        let stop2 = Arc::new(AtomicBool::new(false));
-        let stop2_mon = Arc::clone(&stop2);
-        let app_m2 = app.clone();
-        let proc_m2 = Arc::clone(&processed_full);
-        let tf = total_full;
-        let mon2 = thread::spawn(move || {
-            while !stop2_mon.load(Ordering::Relaxed) {
-                thread::sleep(Duration::from_millis(200));
-                let _ = app_m2.emit(
-                    "duplicate-progress",
-                    DuplicateProgress {
-                        phase: "full_hash".to_string(),
-                        processed: proc_m2.load(Ordering::Relaxed),
-                        total: tf,
-                    },
-                );
+    let mut groups_out: Vec<DuplicateGroup> = Vec::new();
+    for candidates in full_jobs {
+        if cancel.load(Ordering::Relaxed) {
+            stop2.store(true, Ordering::Relaxed);
+            let _ = mon2.join();
+            return Err(AppError::Cancelled);
+        }
+        let size = candidates[0].size;
+        let rows: Vec<(u128, &FileEntry)> = candidates
+            .par_iter()
+            .filter_map(|f| {
+                let r = full_hash(&f.path, &cancel).ok().map(|h| (h, *f));
+                processed_full.fetch_add(1, Ordering::Relaxed);
+                r
+            })
+            .collect();
+        let mut fm: HashMap<u128, Vec<&FileEntry>> = HashMap::new();
+        for (h, f) in rows {
+            fm.entry(h).or_default().push(f);
+        }
+        for (h, list) in fm {
+            if list.len() > 1 {
+                groups_out.push(DuplicateGroup {
+                    content_hash: format!("{:032x}", h),
+                    size,
+                    total_wasted: size * (list.len() as u64 - 1),
+                    files: list
+                        .into_iter()
+                        .map(|f| DuplicateFile {
+                            name: f.name.clone(),
+                            path: f.path.clone(),
+                        })
+                        .collect(),
+                });
             }
-        });
-
-        for (size, candidates) in full_jobs {
-            if cancel.load(Ordering::Relaxed) {
-                stop2.store(true, Ordering::Relaxed);
-                let _ = mon2.join();
-                return Err("Duplicate scan cancelled".to_string());
-            }
-            push_full_hash_groups_parallel(
-                size,
-                candidates,
-                groups_out,
-                cancel,
-                &processed_full,
-            );
         }
-
-        stop2.store(true, Ordering::Relaxed);
-        let _ = mon2.join();
     }
-
-    Ok(())
-}
-
-fn find_duplicates_inner(
-    app: AppHandle,
-    scan_tree: ScanNode,
-    quick_scan: bool,
-    cancel: Arc<AtomicBool>,
-) -> Result<Vec<DuplicateGroup>, String> {
-    if cancel.load(Ordering::Relaxed) {
-        return Err("Duplicate scan cancelled".to_string());
-    }
-
-    let mut files = Vec::new();
-    collect_files(&scan_tree, &mut files);
-    files.retain(|f| f.size > 0);
-
-    let buckets: Vec<Vec<&FileEntry>> = if quick_scan {
-        let mut by_name_size: HashMap<(String, u64), Vec<&FileEntry>> = HashMap::new();
-        for f in &files {
-            by_name_size
-                .entry((f.name.clone(), f.size))
-                .or_default()
-                .push(f);
-        }
-        by_name_size
-            .into_values()
-            .filter(|b| b.len() >= 2)
-            .collect()
-    } else {
-        let mut by_size: HashMap<u64, Vec<&FileEntry>> = HashMap::new();
-        for f in &files {
-            by_size.entry(f.size).or_default().push(f);
-        }
-        by_size
-            .into_values()
-            .filter(|b| b.len() >= 2)
-            .collect()
-    };
-
-    let mut groups_out = Vec::new();
-    process_duplicate_buckets(&app, buckets, &cancel, &mut groups_out)?;
+    stop2.store(true, Ordering::Relaxed);
+    let _ = mon2.join();
 
     if cancel.load(Ordering::Relaxed) {
-        return Err("Duplicate scan cancelled".to_string());
+        return Err(AppError::Cancelled);
     }
-
     groups_out.sort_by(|a, b| b.total_wasted.cmp(&a.total_wasted));
     Ok(groups_out)
 }
@@ -311,28 +224,27 @@ fn find_duplicates_inner(
 pub async fn find_duplicates(
     app: AppHandle,
     dup_state: State<'_, Mutex<DuplicateScanState>>,
-    scan_tree: ScanNode,
+    session: State<'_, ScanSession>,
     quick_scan: bool,
-) -> Result<Vec<DuplicateGroup>, String> {
+    min_size: Option<u64>,
+) -> Result<Vec<DuplicateGroup>, AppError> {
     let cancel_flag = {
-        let mut lock = dup_state
-            .lock()
-            .map_err(|_| "Duplicate scan state lock poisoned".to_string())?;
+        let mut lock = dup_state.lock().unwrap_or_else(|e| e.into_inner());
         lock.cancel_flag = Arc::new(AtomicBool::new(false));
         Arc::clone(&lock.cancel_flag)
     };
+    let min = min_size.unwrap_or(DEFAULT_MIN_SIZE);
 
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        find_duplicates_inner(app_clone, scan_tree, quick_scan, cancel_flag)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    let buckets = collect_buckets(&session, quick_scan, min)?;
+    tauri::async_runtime::spawn_blocking(move || hash_buckets(app, buckets, cancel_flag))
+        .await
+        .map_err(|e| AppError::Internal {
+            message: e.to_string(),
+        })?
 }
 
 #[command]
 pub fn cancel_duplicate_scan(dup_state: State<'_, Mutex<DuplicateScanState>>) {
-    if let Ok(lock) = dup_state.lock() {
-        lock.cancel_flag.store(true, Ordering::Relaxed);
-    }
+    let lock = dup_state.lock().unwrap_or_else(|e| e.into_inner());
+    lock.cancel_flag.store(true, Ordering::Relaxed);
 }

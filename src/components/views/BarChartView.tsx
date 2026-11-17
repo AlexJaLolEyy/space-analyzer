@@ -10,7 +10,8 @@ interface BarChartViewProps {
 }
 
 export function BarChartView({ node }: BarChartViewProps) {
-    const { currentPath, setCurrentPath } = useScanStore();
+    const currentPath = useScanStore((s) => s.currentPath);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
 
     const data = useMemo(() => {
         const sorted = [...node.children].sort((a, b) => b.size - a.size);

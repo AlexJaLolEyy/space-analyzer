@@ -15,15 +15,24 @@ export function SunburstView({ node }: SunburstViewProps) {
 
         // Build a hierarchical object that d3 can consume
         // Only take top levels to avoid overwhelming SVG
-        const build = (node: ScanNode, depth: number): any => {
-            if (depth > 4 || !node.is_dir) {
-                return { name: node.name, value: node.size, path: node.path };
+        // Segments narrower than ~0.2 degrees are invisible, so skip them (keeps the SVG small).
+        const MIN_FRACTION = 0.0005;
+        const MAX_CHILDREN = 40;
+        const total = Math.max(1, node.size);
+        const build = (n: ScanNode, depth: number): any => {
+            if (depth > 4 || !n.is_dir) {
+                return { name: n.name, value: n.size, path: n.path };
             }
+            const kept = n.children
+                .filter(c => c.size / total >= MIN_FRACTION)
+                .slice(0, MAX_CHILDREN);
+            const keptSize = kept.reduce((a, c) => a + c.size, 0);
             return {
-                name: node.name,
-                value: node.size,
-                path: node.path,
-                children: node.children.map(c => build(c, depth + 1))
+                name: n.name,
+                // own value = the part not covered by drawn children, so totals stay exact
+                value: Math.max(0, n.size - keptSize),
+                path: n.path,
+                children: kept.map(c => build(c, depth + 1))
             };
         };
 

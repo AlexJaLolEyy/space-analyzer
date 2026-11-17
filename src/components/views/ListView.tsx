@@ -1,4 +1,4 @@
-import { AnimatePresence, motion } from "framer-motion";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
 import { formatBytes } from "../../lib/format";
@@ -6,27 +6,23 @@ import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 import type { ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
-import { ListItem } from "./ListItem";
+import { LIST_ROW_HEIGHT, ListItem } from "./ListItem";
 
 interface ListViewProps {
     node: ScanNode;
+    /** When true, rows are global search hits — navigate by full path. */
+    searchMode?: boolean;
 }
 
-const itemVariants = {
-    hidden: { opacity: 0, x: -12 },
-    visible: (i: number) => ({
-        opacity: 1,
-        x: 0,
-        transition: {
-            delay: Math.min(i * 0.018, 0.25),
-            duration: 0.22,
-            ease: "easeOut" as const,
-        },
-    }),
-};
-
-export function ListView({ node }: ListViewProps) {
-    const { sortBy, sortOrder, setSort, setCurrentPath, currentPath, selectRowClick, selectedPaths } = useScanStore();
+export function ListView({ node, searchMode = false }: ListViewProps) {
+    const sortBy = useScanStore((s) => s.sortBy);
+    const sortOrder = useScanStore((s) => s.sortOrder);
+    const setSort = useScanStore((s) => s.setSort);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
+    const currentPath = useScanStore((s) => s.currentPath);
+    const selectRowClick = useScanStore((s) => s.selectRowClick);
+    const selectedPaths = useScanStore((s) => s.selectedPaths);
+    const navigateToAbsolutePath = useScanStore((s) => s.navigateToAbsolutePath);
     const addToast = useToastStore((s) => s.addToast);
     const removeNode = useScanStore((s) => s.removeNode);
     const restoreRemovedNode = useScanStore((s) => s.restoreRemovedNode);
@@ -34,7 +30,6 @@ export function ListView({ node }: ListViewProps) {
     const [focusedIndex, setFocusedIndex] = useState(0);
     const [keyDeleteTarget, setKeyDeleteTarget] = useState<ScanNode | null>(null);
     const listRef = useRef<HTMLDivElement>(null);
-    const rowRefs = useRef<(HTMLDivElement | null)[]>([]);
 
     const sortedChildren = useMemo(() => {
         let sorted = [...node.children];
@@ -65,9 +60,16 @@ export function ListView({ node }: ListViewProps) {
         });
     }, [sortedChildren.length]);
 
+    const rowVirtualizer = useVirtualizer({
+        count: sortedChildren.length,
+        getScrollElement: () => listRef.current,
+        estimateSize: () => LIST_ROW_HEIGHT,
+        overscan: 12,
+    });
+
     useEffect(() => {
-        const el = rowRefs.current[focusedIndex];
-        el?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+        if (sortedChildren.length > 0) rowVirtualizer.scrollToIndex(focusedIndex, { align: "auto" });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [focusedIndex]);
 
     useEffect(() => {
@@ -83,10 +85,11 @@ export function ListView({ node }: ListViewProps) {
                 isDir: child.is_dir,
             });
             if (child.is_dir && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
-                setCurrentPath([...currentPath, child.name]);
+                if (searchMode) navigateToAbsolutePath(child.path);
+                else setCurrentPath([...currentPath, child.name]);
             }
         },
-        [orderedPaths, selectRowClick, setCurrentPath, currentPath]
+        [orderedPaths, selectRowClick, setCurrentPath, currentPath, searchMode, navigateToAbsolutePath]
     );
 
     const handleSortToggle = (by: "size" | "name" | "count" | "modified") => {
@@ -113,10 +116,13 @@ export function ListView({ node }: ListViewProps) {
         } else if (e.key === "Enter") {
             e.preventDefault();
             const ch = sortedChildren[focusedIndex];
-            if (ch?.is_dir) setCurrentPath([...currentPath, ch.name]);
+            if (ch?.is_dir) {
+                if (searchMode) navigateToAbsolutePath(ch.path);
+                else setCurrentPath([...currentPath, ch.name]);
+            }
         } else if (e.key === "Delete") {
             const ch = sortedChildren[focusedIndex];
-            if (!ch || ch.path.includes(".space-analyzer")) return;
+            if (!ch || ch.path.includes(".space-analyzer") || ch.protected === true) return;
             e.preventDefault();
             setKeyDeleteTarget(ch);
         } else if (e.key === "Escape") {
@@ -177,48 +183,42 @@ export function ListView({ node }: ListViewProps) {
                 onKeyDown={onListKeyDown}
                 className="flex-1 overflow-y-auto w-full no-scrollbar px-2 py-1 outline-none focus-visible:ring-2 focus-visible:ring-ring/50 rounded-md"
             >
-                <AnimatePresence mode="wait">
-                    <motion.div
-                        key={node.path}
-                        initial="hidden"
-                        animate="visible"
-                        className="flex flex-col"
-                    >
-                        {sortedChildren.slice(0, 1000).map((child, i) => (
-                            <motion.div
-                                key={`${child.path}-${i}`}
-                                custom={i}
-                                variants={i < 25 ? itemVariants : undefined}
-                                className={i >= 25 ? "opacity-100" : ""}
-                            >
-                                <ListItem
-                                    node={child}
-                                    parentSize={node.size}
-                                    onActivate={(n, ev) => handleActivate(i, n, ev)}
-                                    isSelected={selectedSet.has(child.path)}
-                                    isFocused={focusedIndex === i}
-                                    rowRef={(el) => {
-                                        rowRefs.current[i] = el;
+                {sortedChildren.length > 0 ? (
+                    <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+                        {rowVirtualizer.getVirtualItems().map((vr) => {
+                            const child = sortedChildren[vr.index];
+                            if (!child) return null;
+                            return (
+                                <div
+                                    key={child.path}
+                                    style={{
+                                        position: "absolute",
+                                        top: 0,
+                                        left: 0,
+                                        width: "100%",
+                                        height: vr.size,
+                                        transform: `translateY(${vr.start}px)`,
                                     }}
-                                />
-                            </motion.div>
-                        ))}
-                        {sortedChildren.length > 1000 && (
-                            <div className="p-4 text-center text-muted-foreground text-xs italic bg-muted/10 border-t border-border/50">
-                                Showing top 1,000 items of {sortedChildren.length.toLocaleString()}.
-                                <span className="block mt-1 opacity-70">Use the search bar or navigate deeper to find specific files.</span>
-                            </div>
-                        )}
-                        {sortedChildren.length === 0 && (
-                            <div className="p-16 text-center text-muted-foreground text-sm flex flex-col items-center gap-3">
-                                <div className="w-16 h-16 rounded-2xl bg-muted/60 flex items-center justify-center text-3xl opacity-40">
-                                    📂
+                                >
+                                    <ListItem
+                                        node={child}
+                                        parentSize={node.size}
+                                        onActivate={(n, ev) => handleActivate(vr.index, n, ev)}
+                                        isSelected={selectedSet.has(child.path)}
+                                        isFocused={focusedIndex === vr.index}
+                                    />
                                 </div>
-                                <p>This folder appears to be empty.</p>
-                            </div>
-                        )}
-                    </motion.div>
-                </AnimatePresence>
+                            );
+                        })}
+                    </div>
+                ) : (
+                    <div className="p-16 text-center text-muted-foreground text-sm flex flex-col items-center gap-3">
+                        <div className="w-16 h-16 rounded-2xl bg-muted/60 flex items-center justify-center text-3xl opacity-40">
+                            📂
+                        </div>
+                        <p>This folder appears to be empty.</p>
+                    </div>
+                )}
             </div>
 
             <ConfirmModal

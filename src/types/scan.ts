@@ -20,6 +20,8 @@ export interface ScanNode {
     file_count: number;
     category: FileCategory;
     last_modified: number | null;
+    /** System-protected path; UI must not offer deletion. */
+    protected?: boolean;
 }
 
 export interface ScanProgress {
@@ -28,4 +30,24 @@ export interface ScanProgress {
     current_path: string;
     percent: number;
     elapsed_ms: number;
+}
+
+export type ScanStreamMsg = {
+    type: "progress";
+    files_scanned: number;
+    bytes_scanned: number;
+    current_path: string;
+    percent: number;
+    elapsed_ms: number;
+};
+
+export interface SearchHit {
+    name: string;
+    path: string;
+    size: number;
+    is_dir: boolean;
+    category: FileCategory;
+    file_count: number;
+    last_modified: number | null;
+    protected?: boolean;
 }

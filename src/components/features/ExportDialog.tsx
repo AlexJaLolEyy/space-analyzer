@@ -1,25 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { motion } from "framer-motion";
 import { CheckCircle2, Download, FileText as FileCsv, FileJson, X } from "lucide-react";
 import { useState } from "react";
 import { formatBytes } from "../../lib/format";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
-import type { ScanNode } from "../../types/scan";
-
 interface ExportDialogProps {
     onClose: () => void;
-}
-
-function flattenToCSV(node: ScanNode, rows: string[] = []): string[] {
-    const escapedName = `"${node.name.replace(/"/g, '""')}"`;
-    const escapedPath = `"${node.path.replace(/"/g, '""')}"`;
-    rows.push(`${escapedName},${escapedPath},${node.size},${node.is_dir ? "dir" : "file"},${node.category},${node.file_count},${node.last_modified ?? ""}`);
-    for (const child of node.children) {
-        flattenToCSV(child, rows);
-    }
-    return rows;
 }
 
 export function ExportDialog({ onClose }: ExportDialogProps) {
@@ -30,51 +18,32 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
     const [done, setDone] = useState<"json" | "csv" | null>(null);
     const [busy, setBusy] = useState(false);
 
-    const targetNode = scope === "all" ? scanTree : currentNode;
+    const labelNode = scope === "all" ? scanTree : currentNode;
 
-    const exportJSON = async () => {
-        if (!targetNode) return;
+    // The backend streams the export straight to disk; nothing large passes through JS.
+    const runExport = async (format: "json" | "csv") => {
+        if (!scanTree || !currentNode || !labelNode) return;
         setBusy(true);
         try {
-            const filename = `space-analyzer-${targetNode.name.replace(/[:\\/]/g, "-")}.json`;
-            const file = await save({
-                defaultPath: filename,
-                filters: [{ name: "JSON", extensions: ["json"] }],
+            const path = scope === "all" ? scanTree.path : currentNode.path;
+            const base = labelNode.name.replace(/[:\\/]/g, "-");
+            const dest = await save({
+                defaultPath: `space-analyzer-${base}.${format}`,
+                filters: [{ name: format.toUpperCase(), extensions: [format] }],
             });
-            if (file) {
-                await writeTextFile(file, JSON.stringify(targetNode, null, 2));
-                setDone("json");
+            if (dest) {
+                await invoke("export_scan", { path, dest, format });
+                setDone(format);
             }
         } catch (e) {
-            console.error("Export JSON failed:", e);
+            console.error("Export failed:", e);
             addToast("error", `Export failed: ${e}`);
         } finally {
             setBusy(false);
         }
     };
-
-    const exportCSV = async () => {
-        if (!targetNode) return;
-        setBusy(true);
-        try {
-            const header = "Name,Path,Size,Type,Category,FileCount,LastModified";
-            const rows = flattenToCSV(targetNode);
-            const filename = `space-analyzer-${targetNode.name.replace(/[:\\/]/g, "-")}.csv`;
-            const file = await save({
-                defaultPath: filename,
-                filters: [{ name: "CSV", extensions: ["csv"] }],
-            });
-            if (file) {
-                await writeTextFile(file, [header, ...rows].join("\n"));
-                setDone("csv");
-            }
-        } catch (e) {
-            console.error("Export CSV failed:", e);
-            addToast("error", `Export failed: ${e}`);
-        } finally {
-            setBusy(false);
-        }
-    };
+    const exportJSON = () => runExport("json");
+    const exportCSV = () => runExport("csv");
 
     return (
         <div
@@ -146,10 +115,11 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
                             </div>
                         </div>
 
-                        {targetNode && (
+                        {labelNode && (
                             <div className="px-3 py-2 bg-secondary/50 rounded-lg text-xs text-muted-foreground">
-                                <span className="font-medium text-foreground">{targetNode.name}</span>
-                                {" · "}{formatBytes(targetNode.size)}, {targetNode.file_count.toLocaleString()} files
+                                <span className="font-medium text-foreground">{labelNode.name}</span>
+                                {" · "}{formatBytes(labelNode.size)}, {labelNode.file_count.toLocaleString()} files
+                                <span className="block mt-1 opacity-80">Export pulls the full subtree from the backend.</span>
                             </div>
                         )}
 
@@ -161,7 +131,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
                                 <button
                                     type="button"
                                     onClick={exportJSON}
-                                    disabled={!targetNode || busy}
+                                    disabled={!labelNode || busy}
                                     className="flex-1 flex items-center justify-center gap-2 px-3 py-3.5 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-sm font-medium disabled:opacity-50"
                                 >
                                     <FileJson size={20} className="text-amber-500" />
@@ -173,7 +143,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
                                 <button
                                     type="button"
                                     onClick={exportCSV}
-                                    disabled={!targetNode || busy}
+                                    disabled={!labelNode || busy}
                                     className="flex-1 flex items-center justify-center gap-2 px-3 py-3.5 rounded-xl border border-border bg-secondary hover:bg-muted transition-colors text-sm font-medium disabled:opacity-50"
                                 >
                                     <FileCsv size={20} className="text-green-500" />

@@ -1,6 +1,5 @@
 pub mod categorizer;
-pub mod fs_walker;
-pub mod mft_scanner;
+pub mod protected_path;
 
 pub fn is_admin() -> bool {
     #[cfg(windows)]

@@ -1,5 +1,9 @@
 pub mod commands;
+pub mod errors;
 pub mod models;
+pub mod scan;
+pub mod scan_session;
+pub mod scan_stream;
 pub mod utils;
 
 use std::path::PathBuf;
@@ -36,9 +40,20 @@ pub fn run() {
             delete_lock: Mutex::new(()),
             is_elevated: crate::utils::is_admin(),
         }))
+        .manage(scan_session::ScanSession::new())
         .invoke_handler(tauri::generate_handler![
             commands::drives::list_drives,
             commands::scanner::start_scan,
+            commands::tree_api::get_children,
+            commands::tree_api::get_node_info,
+            commands::tree_api::search_nodes,
+            commands::tree_api::get_top_files,
+            commands::tree_api::get_category_breakdown,
+            commands::tree_api::get_black_holes,
+            commands::tree_api::get_dashboard_stats,
+            commands::tree_api::get_export_subtree,
+            commands::tree_api::export_scan,
+            commands::tree_api::get_cleanup_candidates,
             commands::scanner::cancel_scan,
             commands::scanner::get_privilege_status,
             commands::scanner::relaunch_as_admin,

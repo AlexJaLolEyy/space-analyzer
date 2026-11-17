@@ -31,7 +31,8 @@ interface DuplicatesPanelProps {
 }
 
 export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
-    const { scanTree, removeNode } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const removeNode = useScanStore((s) => s.removeNode);
     const { addToast } = useToastStore();
     const [groups, setGroups] = useState<DuplicateGroup[]>([]);
     const [scanEverRun, setScanEverRun] = useState(false);
@@ -71,7 +72,7 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
         setProgress(null);
         setGroups([]);
         try {
-            const res = await invoke<DuplicateGroup[]>("find_duplicates", { scanTree, quickScan });
+            const res = await invoke<DuplicateGroup[]>("find_duplicates", { quickScan });
             setGroups(res);
             setScanEverRun(true);
         } catch (err) {

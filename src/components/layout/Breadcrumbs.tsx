@@ -2,7 +2,8 @@ import { ChevronRight, Home } from "lucide-react";
 import { useScanStore } from "../../stores/scanStore";
 
 export function Breadcrumbs() {
-    const { currentPath, setCurrentPath } = useScanStore();
+    const currentPath = useScanStore((s) => s.currentPath);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
 
     if (!currentPath || currentPath.length === 0) return null;
 

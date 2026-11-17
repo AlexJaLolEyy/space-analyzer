@@ -9,6 +9,8 @@ interface SettingsState {
     excludedPaths: string[];
     accentColor: AccentColor;
     sizeUnit: SizeUnit;
+    skipElevationPrompt: boolean;
+    setSkipElevationPrompt: (v: boolean) => void;
     setDefaultViewMode: (mode: "list" | "pie" | "bar" | "treemap" | "sunburst") => void;
     addExcludedPath: (path: string) => void;
     removeExcludedPath: (path: string) => void;
@@ -23,6 +25,8 @@ export const useSettingsStore = create<SettingsState>()(
             excludedPaths: ["$Recycle.Bin", "System Volume Information", "pagefile.sys", "hiberfil.sys"],
             accentColor: "blue",
             sizeUnit: "binary",
+            skipElevationPrompt: false,
+            setSkipElevationPrompt: (skipElevationPrompt) => set({ skipElevationPrompt }),
             setDefaultViewMode: (defaultViewMode) => set({ defaultViewMode }),
             addExcludedPath: (path) =>
                 set((state) => ({

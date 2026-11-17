@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertOctagon, Copy, Download, FolderSearch, Grid2X2, History, List, RotateCcw, Sparkles } from "lucide-react";
+import { AlertOctagon, Copy, Download, FolderOpen, FolderSearch, Grid2X2, History, List, RotateCcw, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { DriveSelector } from "./components/drive/DriveSelector";
 import { BentoDashboard } from "./components/features/BentoDashboard";
@@ -20,6 +21,7 @@ import { SelectionActionBar } from "./components/ui/SelectionActionBar";
 import { ViewContainer } from "./components/views/ViewContainer";
 import { useScan } from "./hooks/useScan";
 import { useScanStore } from "./stores/scanStore";
+import { useSettingsStore } from "./stores/settingsStore";
 import { useToastStore } from "./stores/toastStore";
 import type { DriveInfo } from "./types/drive";
 import type { ScanDiff } from "./types/history";
@@ -27,7 +29,10 @@ import type { ScanNode } from "./types/scan";
 
 export function MainWorkspace() {
     const { startScan, cancelScan, isScanning, progress, error } = useScan();
-    const { scanTree, reset, currentPath } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const reset = useScanStore((s) => s.reset);
+    const currentPath = useScanStore((s) => s.currentPath);
+    const setSkipElevationPrompt = useSettingsStore((s) => s.setSkipElevationPrompt);
     const [isElevated, setIsElevated] = useState<boolean | null>(null);
     const [showElevationDialog, setShowElevationDialog] = useState(false);
     const [elevateLoading, setElevateLoading] = useState(false);
@@ -54,7 +59,7 @@ export function MainWorkspace() {
                 const status = await invoke<{ is_elevated: boolean }>("get_privilege_status");
                 if (!mounted) return;
                 setIsElevated(status.is_elevated);
-                setShowElevationDialog(!status.is_elevated);
+                setShowElevationDialog(!status.is_elevated && !useSettingsStore.getState().skipElevationPrompt);
             } catch {
                 if (!mounted) return;
                 setIsElevated(false);
@@ -114,6 +119,19 @@ export function MainWorkspace() {
         setShowPathInput(false);
         setShowDashboard(true);
         startScan(trimmed);
+    };
+
+    const handleBrowse = async () => {
+        try {
+            const picked = await open({ directory: true, multiple: false });
+            if (typeof picked === "string" && picked) {
+                setTargetPath(picked);
+                setShowDashboard(true);
+                startScan(picked);
+            }
+        } catch (err: any) {
+            addToast("error", `Could not open folder picker: ${err}`);
+        }
     };
 
     const handleLoadScan = async (id: string) => {
@@ -178,7 +196,7 @@ export function MainWorkspace() {
                     case 'f':
                         e.preventDefault();
                         // Focus on search input by finding it conceptually or ref 
-                        const searchInput = document.querySelector('input[placeholder="Filter items…"]') as HTMLInputElement;
+                        const searchInput = document.querySelector('input[placeholder="Search tree… (Ctrl+F)"]') as HTMLInputElement;
                         if (searchInput) searchInput.focus();
                         break;
                     case 'backspace':
@@ -248,7 +266,7 @@ export function MainWorkspace() {
                 onToggleDuplicates={() => setShowDuplicates((v) => !v)}
                 onToggleDashboard={() => setShowDashboard((v) => !v)}
                 onFocusSearch={() => {
-                    const el = document.querySelector('input[placeholder="Filter items… (Ctrl+F)"]') as HTMLInputElement | null;
+                    const el = document.querySelector('input[placeholder="Search tree… (Ctrl+F)"]') as HTMLInputElement | null;
                     el?.focus();
                 }}
                 onOpenCustomPath={() => {
@@ -294,9 +312,13 @@ export function MainWorkspace() {
                                             </h2>
                                         </div>
                                         {isElevated === false && (
-                                            <div className="text-[11px] text-muted-foreground">
-                                                Standard scan mode — MFT Turbo available if you run elevated.
-                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => setShowElevationDialog(true)}
+                                                className="text-[11px] text-muted-foreground hover:text-foreground text-left underline-offset-2 hover:underline"
+                                            >
+                                                Standard mode. Enable Turbo (admin) for much faster scans.
+                                            </button>
                                         )}
                                     </div>
 
@@ -370,6 +392,13 @@ export function MainWorkspace() {
                                             <Download size={14} /> Export
                                         </button>
                                         <button
+                                            onClick={handleBrowse}
+                                            title="Choose a folder to scan"
+                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
+                                        >
+                                            <FolderOpen size={14} /> Browse
+                                        </button>
+                                        <button
                                             onClick={() => setShowPathInput(v => !v)}
                                             title="Scan custom folder path"
                                             className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
@@ -438,7 +467,11 @@ export function MainWorkspace() {
                         setElevateLoading(false);
                     }
                 }}
-                onCancel={() => setShowElevationDialog(false)}
+                onCancel={() => {
+                    // Remember the choice; "Enable Turbo" stays available in the results header.
+                    setSkipElevationPrompt(true);
+                    setShowElevationDialog(false);
+                }}
             />
 
             <AnimatePresence>

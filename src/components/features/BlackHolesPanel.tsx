@@ -1,43 +1,43 @@
+import { invoke } from "@tauri-apps/api/core";
 import { AlertOctagon } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
 import { motion } from "framer-motion";
-import { useMemo } from "react";
-import type { ScanNode } from "../../types/scan";
+import { useEffect, useState } from "react";
 
 interface BlackHolesPanelProps {
     onClose: () => void;
 }
 
+interface BlackHoleEntry {
+    name: string;
+    path: string;
+    size: number;
+    depth: number;
+}
+
 export function BlackHolesPanel({ onClose }: BlackHolesPanelProps) {
-    const { scanTree } = useScanStore();
+    const scanTree = useScanStore((s) => s.scanTree);
+    const [blackHoles, setBlackHoles] = useState<BlackHoleEntry[]>([]);
 
-    // Algorithm: folders > 1GB, and rank them by depth and size.
-    // For now we don't have true staleness, so we just do depth * size.
-    const blackHoles = useMemo(() => {
-        if (!scanTree) return [];
-
-        const holes: { node: ScanNode, score: number, depth: number }[] = [];
-
-        const MIN_SIZE = 1024 * 1024 * 1024; // 1 GB
-
-        const traverse = (node: ScanNode, depth: number) => {
-            if (node.is_dir && node.size > MIN_SIZE && depth > 3) {
-                holes.push({
-                    node,
-                    depth,
-                    score: node.size * depth
-                });
+    useEffect(() => {
+        if (!scanTree) {
+            setBlackHoles([]);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const rows = await invoke<BlackHoleEntry[]>("get_black_holes", { limit: 50 });
+                if (!cancelled) setBlackHoles(rows);
+            } catch (e) {
+                console.error("get_black_holes failed:", e);
+                if (!cancelled) setBlackHoles([]);
             }
-            for (const child of node.children) {
-                if (child.is_dir) {
-                    traverse(child, depth + 1);
-                }
-            }
+        })();
+        return () => {
+            cancelled = true;
         };
-
-        traverse(scanTree, 0);
-        return holes.sort((a, b) => b.score - a.score).slice(0, 50);
     }, [scanTree]);
 
     return (
@@ -76,16 +76,16 @@ export function BlackHolesPanel({ onClose }: BlackHolesPanelProps) {
                     blackHoles.map((hole, idx) => (
                         <div key={idx} className="bg-secondary/50 border border-border rounded-xl p-3 flex flex-col gap-2">
                             <div className="flex items-start justify-between">
-                                <span className="text-sm font-semibold truncate flex-1" title={hole.node.path}>
-                                    {hole.node.name}
+                                <span className="text-sm font-semibold truncate flex-1" title={hole.path}>
+                                    {hole.name}
                                 </span>
                                 <span className="text-xs bg-purple-500/20 text-purple-500 px-2 py-0.5 rounded font-mono font-medium shrink-0 ml-2">
-                                    {formatBytes(hole.node.size)}
+                                    {formatBytes(hole.size)}
                                 </span>
                             </div>
                             <div className="flex justify-between items-center text-xs text-muted-foreground">
-                                <span className="truncate flex-1 mr-2" title={hole.node.path}>
-                                    {hole.node.path}
+                                <span className="truncate flex-1 mr-2" title={hole.path}>
+                                    {hole.path}
                                 </span>
                                 <span className="bg-background px-1.5 py-0.5 rounded shrink-0">
                                     Depth: {hole.depth}

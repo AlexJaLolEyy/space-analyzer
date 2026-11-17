@@ -61,7 +61,9 @@ const layoutTreemap = (
 export function TreemapView({ node }: TreemapViewProps) {
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
-    const { currentPath, setCurrentPath } = useScanStore();
+    const overlayRef = useRef<HTMLCanvasElement>(null);
+    const currentPath = useScanStore((s) => s.currentPath);
+    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
     const [hoverNode, setHoverNode] = useState<ScanNode | null>(null);
     const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
     const rectsRef = useRef<Rect[]>([]);
@@ -99,33 +101,18 @@ export function TreemapView({ node }: TreemapViewProps) {
             const rects = layoutTreemap(node.children, totalSize, 0, 0, w, h, colorMap.current);
             rectsRef.current = rects;
 
-            const hovered = hoverNode;
-
             for (const r of rects) {
-                // Fill
-                const isHovered = hovered && hovered.name === r.node.name && hovered.size === r.node.size;
-
-                if (isHovered) {
-                    ctx.fillStyle = r.color;
-                    ctx.globalAlpha = 0.9; // Slight brightness shift or transparency change
-                } else {
-                    ctx.fillStyle = r.color;
-                    ctx.globalAlpha = 1.0;
-                }
+                if (r.w < 3 || r.h < 3) continue;
+                ctx.fillStyle = r.color;
+                ctx.globalAlpha = 1.0;
 
                 ctx.beginPath();
                 ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4);
                 ctx.fill();
                 ctx.globalAlpha = 1.0;
 
-                // Subtle inner border or glow
-                if (isHovered) {
-                    ctx.strokeStyle = "rgba(255,255,255,0.5)";
-                    ctx.lineWidth = 2;
-                } else {
-                    ctx.strokeStyle = "rgba(0,0,0,0.15)";
-                    ctx.lineWidth = 1;
-                }
+                ctx.strokeStyle = "rgba(0,0,0,0.15)";
+                ctx.lineWidth = 1;
                 ctx.stroke();
 
                 // Draw text if enough space
@@ -171,7 +158,28 @@ export function TreemapView({ node }: TreemapViewProps) {
         if (rect.width && rect.height) resize();
 
         return () => observer.disconnect();
-    }, [node, hoverNode]);
+    }, [node]);
+
+    // Hover highlight lives on its own overlay canvas so mouse moves never trigger a full redraw.
+    useEffect(() => {
+        const overlay = overlayRef.current;
+        const base = canvasRef.current;
+        if (!overlay || !base) return;
+        overlay.width = base.width;
+        overlay.height = base.height;
+        overlay.style.width = base.style.width;
+        overlay.style.height = base.style.height;
+        const ctx = overlay.getContext("2d");
+        if (!ctx || !hoverNode) return;
+        ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+        const r = rectsRef.current.find((x) => x.node === hoverNode);
+        if (!r) return;
+        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4);
+        ctx.stroke();
+    }, [hoverNode, node]);
 
     const handleMouseMove = (e: React.MouseEvent) => {
         const rect = canvasRef.current?.getBoundingClientRect();
@@ -231,6 +239,7 @@ export function TreemapView({ node }: TreemapViewProps) {
                     onClick={handleClick}
                     className="absolute top-0 left-0 w-full h-full cursor-crosshair"
                 />
+                <canvas ref={overlayRef} className="absolute top-0 left-0 pointer-events-none" />
 
                 {hoverNode && (
                     <div

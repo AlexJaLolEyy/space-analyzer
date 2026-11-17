@@ -29,6 +29,8 @@ interface ScanState {
     removeNode: (path: string) => void;
     restoreRemovedNode: (subtree: ScanNode) => void;
     removePathsFromSelection: (paths: string[]) => void;
+    mergeChildren: (dirPath: string, children: ScanNode[]) => void;
+    navigateToAbsolutePath: (absolutePath: string) => void;
     reset: () => void;
 }
 
@@ -42,6 +44,12 @@ export const findNodeByPath = (root: ScanNode | null, pathParts: string[]): Scan
     }
     return current;
 };
+
+export function findNodeByAbsolutePath(root: ScanNode | null, targetPath: string): ScanNode | null {
+    if (!root) return null;
+    const chain = findPathChain(root, targetPath);
+    return chain ? chain[chain.length - 1]! : null;
+}
 
 function findPathChain(root: ScanNode, targetPath: string): ScanNode[] | null {
     const norm = (p: string) => p.replace(/[/\\]+$/, "").toLowerCase();
@@ -222,6 +230,31 @@ export const useScanStore = create<ScanState>()(
             set((state) => {
                 const drop = new Set(paths);
                 state.selectedPaths = state.selectedPaths.filter((p) => !drop.has(p));
+            }),
+
+        mergeChildren: (dirPath, children) =>
+            set((state) => {
+                if (!state.scanTree) return;
+                const chain = findPathChain(state.scanTree, dirPath);
+                if (!chain?.length) return;
+                const node = chain[chain.length - 1];
+                if (!node.is_dir) return;
+                node.children = children;
+            }),
+
+        navigateToAbsolutePath: (absolutePath) =>
+            set((state) => {
+                if (!state.scanTree) return;
+                const rootPath = state.scanTree.path.replace(/[/\\]+$/, "");
+                let p = absolutePath.replace(/[/\\]+$/, "");
+                const normRoot = rootPath.toLowerCase();
+                const normP = p.toLowerCase();
+                if (!normP.startsWith(normRoot)) return;
+                let rel = p.slice(rootPath.length).replace(/^[/\\]+/, "");
+                const segments = rel
+                    ? [state.scanTree.name, ...rel.split(/[/\\]+/).filter(Boolean)]
+                    : [state.scanTree.name];
+                state.currentPath = segments;
             }),
 
         reset: () =>
