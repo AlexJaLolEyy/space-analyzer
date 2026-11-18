@@ -1,7 +1,8 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useScanStore } from "../stores/scanStore";
-import type { ScanNode, ScanProgress, ScanStreamMsg } from "../types/scan";
+import { useSettingsStore } from "../stores/settingsStore";
+import type { ScanProgress, ScanResult, ScanStreamMsg } from "../types/scan";
 
 export function useScan() {
     const [isScanning, setIsScanning] = useState(false);
@@ -36,8 +37,10 @@ export function useScan() {
                     }
                 };
 
-                const root = await invoke<ScanNode>("start_scan", { path, stream: channel });
-                setScanTree(root);
+                const excluded = useSettingsStore.getState().excludedPaths;
+                const res = await invoke<ScanResult>("start_scan", { path, excluded, stream: channel });
+                setScanTree(res.root);
+                useScanStore.getState().setScanInfo({ engine: res.engine, elapsedMs: res.elapsed_ms });
             } catch (err) {
                 setError(err instanceof Error ? err.message : String(err));
             } finally {

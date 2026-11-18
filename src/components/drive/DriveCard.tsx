@@ -1,7 +1,7 @@
 import { motion, useMotionValue, useTransform, useSpring } from "framer-motion";
 import { ArrowRight, HardDrive, Network, Server, Usb } from "lucide-react";
 import { useRef } from "react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import type { DriveInfo } from "../../types/drive";
 
 interface DriveCardProps {
@@ -10,6 +10,7 @@ interface DriveCardProps {
 }
 
 export function DriveCard({ drive, onClick }: DriveCardProps) {
+    const fmt = useFormatBytes();
     const ref = useRef<HTMLDivElement>(null);
 
     const usagePercentage =
@@ -109,7 +110,7 @@ export function DriveCard({ drive, onClick }: DriveCardProps) {
             {/* Usage bar */}
             <div className="space-y-1.5">
                 <div className="flex justify-between text-xs">
-                    <span className="text-muted-foreground font-mono">{formatBytes(drive.used_bytes)} used</span>
+                    <span className="text-muted-foreground font-mono">{fmt(drive.used_bytes)} used</span>
                     <span className="font-mono font-semibold" style={{ color: usageColor }}>
                         {usagePercentage.toFixed(0)}%
                     </span>
@@ -126,8 +127,8 @@ export function DriveCard({ drive, onClick }: DriveCardProps) {
                     />
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground font-mono">
-                    <span>{formatBytes(drive.free_bytes)} free</span>
-                    <span>{formatBytes(drive.total_bytes)} total</span>
+                    <span>{fmt(drive.free_bytes)} free</span>
+                    <span>{fmt(drive.total_bytes)} total</span>
                 </div>
             </div>
         </motion.div>

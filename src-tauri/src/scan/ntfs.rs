@@ -4,7 +4,7 @@
 //! parents, sizes and timestamps inline, so no per-file syscalls are needed. A reader thread
 //! streams chunks into a bounded channel while rayon workers parse the previous chunk.
 
-use super::{is_cancelled, Progress, ProgressFn, RawScan, F_DIR, F_USED, NONE};
+use super::{is_cancelled, MftMeta, Progress, ProgressFn, RawScan, F_DIR, F_USED, NONE};
 use rayon::prelude::*;
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::{FileExt, OpenOptionsExt};
@@ -103,7 +103,31 @@ fn volume_data(file: &File) -> Result<VolumeData, String> {
     })
 }
 
-fn read_exact_at(file: &File, mut off: u64, mut buf: &mut [u8]) -> Result<(), String> {
+const FSCTL_QUERY_USN_JOURNAL: u32 = 0x0009_00F4;
+
+/// `(journal id, first usn, next usn)` of the volume's change journal, if it has one.
+pub(crate) fn query_usn_journal(file: &File) -> Option<(u64, i64, i64)> {
+    let mut buf = [0u8; 80];
+    let mut ret = 0u32;
+    let ok = unsafe {
+        DeviceIoControl(
+            file.as_raw_handle() as isize,
+            FSCTL_QUERY_USN_JOURNAL,
+            std::ptr::null(),
+            0,
+            buf.as_mut_ptr().cast(),
+            buf.len() as u32,
+            &mut ret,
+            std::ptr::null_mut(),
+        )
+    };
+    if ok == 0 || ret < 24 {
+        return None;
+    }
+    Some((rd64(&buf, 0), rd64(&buf, 8) as i64, rd64(&buf, 16) as i64))
+}
+
+pub(crate) fn read_exact_at(file: &File, mut off: u64, mut buf: &mut [u8]) -> Result<(), String> {
     while !buf.is_empty() {
         let n = file.seek_read(buf, off).map_err(|e| format!("Volume read failed at {off}: {e}"))?;
         if n == 0 {
@@ -437,6 +461,8 @@ pub fn scan(
     let vd = volume_data(&file)?;
     let bpr = vd.bytes_per_record;
     let bpc = vd.bytes_per_cluster;
+    // query the journal first: changes made while we read are simply replayed on refresh
+    let journal = query_usn_journal(&file);
 
     let mut rec0 = vec![0u8; bpr];
     read_exact_at(&file, vd.mft_start_lcn * bpc, &mut rec0)?;
@@ -598,5 +624,13 @@ pub fn scan(
         names: cols.names,
         root,
         root_path,
+        mft_meta: journal.map(|(journal_id, _, next_usn)| MftMeta {
+            volume: drive.to_string(),
+            bytes_per_record: bpr as u32,
+            extents: ext.runs.clone(),
+            total_records: total_records as u64,
+            journal_id,
+            next_usn,
+        }),
     })
 }

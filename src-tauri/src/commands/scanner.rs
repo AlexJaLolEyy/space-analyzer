@@ -10,10 +10,17 @@ use std::sync::{
     Arc,
 };
 use tauri::ipc::Channel;
-use tauri::{command, State};
+use tauri::{command, AppHandle, Emitter, State};
 
 pub struct ScanState {
     pub cancel_flag: Arc<AtomicBool>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ScanResult {
+    pub root: ScanNode,
+    pub engine: String,
+    pub elapsed_ms: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -32,12 +39,15 @@ pub fn validate_scan_path(path: &str) -> Result<PathBuf, AppError> {
 
 #[command]
 pub async fn start_scan(
+    app: AppHandle,
     state: State<'_, Mutex<ScanState>>,
     app_state: State<'_, Mutex<crate::AppState>>,
     session: State<'_, ScanSession>,
     path: String,
+    excluded: Option<Vec<String>>,
     stream: Channel<ScanStreamMsg>,
-) -> Result<ScanNode, AppError> {
+) -> Result<ScanResult, AppError> {
+    let excluded = excluded.unwrap_or_default();
     let canonical = validate_scan_path(&path)?;
     {
         let mut app_state_lock = app_state.lock().unwrap_or_else(|e| e.into_inner());
@@ -66,7 +76,7 @@ pub async fn start_scan(
                 engine: p.engine.to_string(),
             });
         };
-        scan_path(&scan_path_str, None, &cancel_flag, &progress)
+        scan_path(&scan_path_str, None, &cancel_flag, &progress, &excluded)
     })
     .await
     .map_err(|e| AppError::Internal {
@@ -80,8 +90,87 @@ pub async fn start_scan(
         }
     })?;
 
+    let engine = outcome.engine.label().to_string();
+    let elapsed_ms = outcome.elapsed_ms;
     session.replace(outcome.arena);
-    session.with_arena(|a| Ok(a.root_shallow(2)))
+    let root = session.with_arena(|a| Ok(a.root_shallow(2)))?;
+
+    // compare with the previous snapshot of this root, then save the new one
+    let bg_session = session.inner().clone();
+    std::thread::spawn(move || {
+        crate::snapshot::update_deltas_and_save(&bg_session, crate::snapshot::ORIGIN_APP, true);
+        let _ = app.emit("deltas-ready", ());
+    });
+
+    Ok(ScanResult { root, engine, elapsed_ms })
+}
+
+/// Re-reads one folder from disk and splices the result into the loaded scan. Files resolve to
+/// their parent folder; a folder that no longer exists is removed from the scan.
+#[command]
+pub async fn rescan_subtree(
+    app: AppHandle,
+    session: State<'_, ScanSession>,
+    path: String,
+) -> Result<ScanNode, AppError> {
+    let (target, generation, full_path, excluded, is_root) = session
+        .read(move |a| {
+            let mut id = a.resolve_path(&path)?;
+            if !a.is_dir(id) {
+                id = a.parent_of(id);
+            }
+            Ok((id, a.generation(), a.full_path(id), a.excluded().clone(), id == a.root_id()))
+        })
+        .await?;
+
+    if !Path::new(&full_path).is_dir() {
+        if is_root {
+            return Err(AppError::validation("The scanned folder no longer exists"));
+        }
+        let node = session
+            .write(move |a| {
+                if a.generation() != generation {
+                    return Err("The scan changed while refreshing; try again".to_string());
+                }
+                let parent = a.parent_of(target);
+                a.remove_node(target)?;
+                Ok(a.node_to_scan(parent, 0))
+            })
+            .await?;
+        spawn_deltas(app, session.inner().clone());
+        return Ok(node);
+    }
+
+    // walk outside the lock so the UI stays responsive while the disk is read
+    let cancel = Arc::new(AtomicBool::new(false));
+    let scan_dir = full_path.clone();
+    let raw = tauri::async_runtime::spawn_blocking(move || {
+        let progress = |_p: Progress| {};
+        crate::scan::walker::scan(&scan_dir, &cancel, &progress, std::time::Instant::now(), &excluded)
+    })
+    .await
+    .map_err(|e| AppError::Internal { message: e.to_string() })?
+    .map_err(|e| AppError::Internal { message: e })?;
+
+    let node = session
+        .write(move |a| {
+            if a.generation() != generation {
+                return Err("The scan changed while refreshing; try again".to_string());
+            }
+            a.replace_subtree(target, raw, &AtomicBool::new(false))?;
+            Ok(a.node_to_scan(target, 0))
+        })
+        .await?;
+    spawn_deltas(app, session.inner().clone());
+    Ok(node)
+}
+
+/// Recomputes "changes since last scan" in the background after the tree was patched.
+fn spawn_deltas(app: AppHandle, session: ScanSession) {
+    std::thread::spawn(move || {
+        crate::snapshot::update_deltas_and_save(&session, crate::snapshot::ORIGIN_APP, false);
+        let _ = app.emit("deltas-ready", ());
+    });
 }
 
 #[command]

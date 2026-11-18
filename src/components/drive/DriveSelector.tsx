@@ -1,5 +1,5 @@
 import { motion, Variants } from "framer-motion";
-import { FolderOpen, FolderSearch, History, HardDrive } from "lucide-react";
+import { FolderOpen, FolderSearch, HardDrive } from "lucide-react";
 import { useState } from "react";
 import { useDrives } from "../../hooks/useDrives";
 import type { DriveInfo } from "../../types/drive";
@@ -7,7 +7,6 @@ import { DriveCard } from "./DriveCard";
 
 interface DriveSelectorProps {
     onDriveSelected: (drive: DriveInfo) => void;
-    onOpenHistory?: () => void;
     onBrowse?: () => void;
     onCustomPath?: (path: string) => void;
 }
@@ -22,7 +21,7 @@ const cardVariants: Variants = {
     visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
 };
 
-export function DriveSelector({ onDriveSelected, onOpenHistory, onBrowse, onCustomPath }: DriveSelectorProps) {
+export function DriveSelector({ onDriveSelected, onBrowse, onCustomPath }: DriveSelectorProps) {
     const { drives, isLoading, error } = useDrives();
     const [showPath, setShowPath] = useState(false);
     const [pathValue, setPathValue] = useState("");
@@ -156,14 +155,6 @@ export function DriveSelector({ onDriveSelected, onOpenHistory, onBrowse, onCust
                     <p className="text-center text-xs text-muted-foreground/60 mb-6">
                         Click on a drive card to begin scanning
                     </p>
-                    {onOpenHistory && (
-                        <button
-                            onClick={onOpenHistory}
-                            className="bg-secondary text-secondary-foreground px-6 py-2.5 rounded-full text-sm font-semibold shadow-sm hover:shadow transition-all flex items-center gap-2"
-                        >
-                            <History size={16} /> Open Scan History
-                        </button>
-                    )}
                 </motion.div>
             </div>
         </motion.div>

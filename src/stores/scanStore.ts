@@ -1,11 +1,17 @@
 import { create } from "zustand";
 import { immer } from "zustand/middleware/immer";
 import type { ScanNode } from "../types/scan";
+import { useSettingsStore, type ViewMode } from "./settingsStore";
+
+export interface ScanInfo {
+    engine: string;
+    elapsedMs: number;
+}
 
 interface ScanState {
     scanTree: ScanNode | null;
     currentPath: string[];
-    viewMode: "list" | "pie" | "bar" | "treemap" | "sunburst";
+    viewMode: ViewMode;
     sortBy: "size" | "name" | "count" | "modified";
     sortOrder: "asc" | "desc";
     searchQuery: string;
@@ -13,10 +19,17 @@ interface ScanState {
     selectedDrive: { total_bytes: number; name: string } | null;
     selectedPaths: string[];
     selectionAnchorPath: string | null;
+    scanInfo: ScanInfo | null;
+    /** Bumped when background deltas finish so panels can refetch. */
+    deltasVersion: number;
     setScanTree: (tree: ScanNode) => void;
+    setScanInfo: (info: ScanInfo | null) => void;
+    bumpDeltasVersion: () => void;
+    patchNode: (path: string, info: ScanNode) => void;
+    invalidatePath: (path: string) => void;
     setSelectedDrive: (drive: { total_bytes: number; name: string } | null) => void;
     setCurrentPath: (path: string[]) => void;
-    setViewMode: (mode: "list" | "pie" | "bar" | "treemap" | "sunburst") => void;
+    setViewMode: (mode: ViewMode) => void;
     setSort: (by: "size" | "name" | "count" | "modified", order: "asc" | "desc") => void;
     setSearchQuery: (query: string) => void;
     setCategoryFilter: (categoryFilter: string) => void;
@@ -74,6 +87,7 @@ function removeNodeAndPropagate(root: ScanNode, pathToRemove: string): boolean {
         const removedChild = root.children[childIndex];
         root.children.splice(childIndex, 1);
         root.size -= removedChild.size;
+        root.alloc -= removedChild.alloc;
         root.file_count -= removedChild.file_count;
         return true;
     }
@@ -82,6 +96,7 @@ function removeNodeAndPropagate(root: ScanNode, pathToRemove: string): boolean {
         const removed = removeNodeAndPropagate(child, pathToRemove);
         if (removed) {
             root.size = root.children.reduce((acc, c) => acc + c.size, 0);
+            root.alloc = root.children.reduce((acc, c) => acc + c.alloc, 0);
             root.file_count = root.children.reduce((acc, c) => acc + c.file_count, 0);
             return true;
         }
@@ -93,6 +108,7 @@ function removeNodeAndPropagate(root: ScanNode, pathToRemove: string): boolean {
 function recomputeDirTotals(node: ScanNode) {
     if (!node.is_dir) return;
     node.size = node.children.reduce((acc, c) => acc + c.size, 0);
+    node.alloc = node.children.reduce((acc, c) => acc + c.alloc, 0);
     node.file_count = node.children.reduce((acc, c) => acc + c.file_count, 0);
 }
 
@@ -108,10 +124,45 @@ export const useScanStore = create<ScanState>()(
         selectedDrive: null,
         selectedPaths: [],
         selectionAnchorPath: null,
+        scanInfo: null,
+        deltasVersion: 0,
+
+        setScanInfo: (scanInfo) =>
+            set((state) => {
+                state.scanInfo = scanInfo;
+            }),
+
+        bumpDeltasVersion: () =>
+            set((state) => {
+                state.deltasVersion += 1;
+            }),
+
+        patchNode: (path, info) =>
+            set((state) => {
+                if (!state.scanTree) return;
+                const chain = findPathChain(state.scanTree, path);
+                if (!chain?.length) return;
+                const node = chain[chain.length - 1];
+                node.size = info.size;
+                node.alloc = info.alloc;
+                node.file_count = info.file_count;
+                node.last_modified = info.last_modified;
+                node.delta = info.delta;
+            }),
+
+        invalidatePath: (path) =>
+            set((state) => {
+                if (!state.scanTree) return;
+                const chain = findPathChain(state.scanTree, path);
+                if (!chain?.length) return;
+                const node = chain[chain.length - 1];
+                if (node.is_dir) node.children = [];
+            }),
 
         setScanTree: (tree) =>
             set((state) => {
                 state.scanTree = tree;
+                state.viewMode = useSettingsStore.getState().defaultViewMode;
                 state.currentPath = [tree.name];
                 state.selectedPaths = [];
                 state.selectionAnchorPath = null;
@@ -266,6 +317,7 @@ export const useScanStore = create<ScanState>()(
                 state.selectedDrive = null;
                 state.selectedPaths = [];
                 state.selectionAnchorPath = null;
+                state.scanInfo = null;
             }),
     }))
 );

@@ -1,7 +1,8 @@
 import { useState, useMemo } from "react";
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import { getCategoryColor, getDirColor } from "../../lib/colors";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
 
@@ -10,20 +11,27 @@ interface PieChartViewProps {
 }
 
 export function PieChartView({ node }: PieChartViewProps) {
+    const fmt = useFormatBytes();
+    const mode = useSizeMode();
+    const total = nodeSize(node, mode);
     const currentPath = useScanStore((s) => s.currentPath);
     const setCurrentPath = useScanStore((s) => s.setCurrentPath);
     const [activeIndex, setActiveIndex] = useState<number | undefined>(undefined);
 
     const data = useMemo(() => {
-        const sorted = [...node.children].sort((a, b) => b.size - a.size);
+        const sorted = node.children
+            .map((c) => ({ ...c, value: nodeSize(c, mode) }))
+            .sort((a, b) => b.value - a.value);
         const top = sorted.slice(0, 10);
         const others = sorted.slice(10);
 
         if (others.length > 0) {
-            const othersSize = others.reduce((acc, c) => acc + c.size, 0);
+            const othersSize = others.reduce((acc, c) => acc + c.value, 0);
             top.push({
                 name: "Other",
                 size: othersSize,
+                alloc: othersSize,
+                value: othersSize,
                 category: "Other",
                 is_dir: false,
                 children: [],
@@ -31,11 +39,10 @@ export function PieChartView({ node }: PieChartViewProps) {
                 file_count: 0,
                 last_modified: null,
                 protected: false,
-            } as ScanNode);
+            });
         }
         return top;
-    }, [node.children]);
-
+    }, [node.children, mode]);
     const getColor = (entry: ScanNode, index: number) => {
         if (entry.is_dir) return getDirColor(index);
         return getCategoryColor(entry.category);
@@ -50,11 +57,11 @@ export function PieChartView({ node }: PieChartViewProps) {
     const CustomTooltip = ({ active, payload }: any) => {
         if (active && payload && payload.length) {
             const d = payload[0].payload;
-            const pct = node.size > 0 ? ((d.size / node.size) * 100).toFixed(1) : "0";
+            const pct = total > 0 ? ((d.value / total) * 100).toFixed(1) : "0";
             return (
                 <div className="glass p-3 rounded-xl border-border/50 text-sm max-w-50 shadow-lg">
                     <p className="font-semibold truncate" title={d.name}>{d.name}</p>
-                    <p className="text-muted-foreground">{formatBytes(d.size)}</p>
+                    <p className="text-muted-foreground">{fmt(d.value)}</p>
                     <p className="text-primary font-medium">{pct}%</p>
                     {d.is_dir && d.name !== "Other" && (
                         <p className="text-xs text-muted-foreground mt-1 italic">Click to drill down</p>
@@ -97,7 +104,7 @@ export function PieChartView({ node }: PieChartViewProps) {
                     <PieChart>
                         <Pie
                             data={data}
-                            dataKey="size"
+                            dataKey="value"
                             nameKey="name"
                             cx="50%"
                             cy="50%"
@@ -134,7 +141,7 @@ export function PieChartView({ node }: PieChartViewProps) {
             <div className="w-56 shrink-0 flex flex-col gap-1 py-6 pr-4 overflow-y-auto no-scrollbar">
                 <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">Breakdown</p>
                 {data.map((entry, index) => {
-                    const pct = node.size > 0 ? ((entry.size / node.size) * 100).toFixed(1) : "0";
+                    const pct = total > 0 ? ((entry.value / total) * 100).toFixed(1) : "0";
                     const color = getColor(entry, index);
                     return (
                         <button

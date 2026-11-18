@@ -1,261 +1,321 @@
-import { ChevronLeft } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { hierarchy, treemap, treemapSquarify, type HierarchyRectangularNode } from "d3-hierarchy";
+import { ChevronDown, ChevronLeft, ChevronUp, ExternalLink } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCategoryColor, getDirColor } from "../../lib/colors";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
 import { useScanStore } from "../../stores/scanStore";
-import type { ScanNode } from "../../types/scan";
+import type { ExtStat, ScanNode } from "../../types/scan";
 
 interface TreemapViewProps {
     node: ScanNode;
 }
 
-interface Rect {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-    node: ScanNode;
-    color: string;
-}
+type RNode = HierarchyRectangularNode<ScanNode>;
 
-const layoutTreemap = (
-    nodes: ScanNode[],
-    totalSize: number,
-    x: number,
-    y: number,
-    w: number,
-    h: number,
-    colorMap: Map<string, string>
-): Rect[] => {
-    let rects: Rect[] = [];
-    let curX = x;
-    let curY = y;
-    let remainingW = w;
-    let remainingH = h;
-    let remainingSize = totalSize;
-    const sorted = [...nodes].sort((a, b) => b.size - a.size);
-
-    for (const n of sorted) {
-        if (remainingSize <= 0) break;
-        const ratio = n.size / remainingSize;
-        const color = colorMap.get(n.name) || getCategoryColor(n.category);
-
-        if (remainingW > remainingH) {
-            const sliceW = remainingW * ratio;
-            rects.push({ x: curX, y: curY, w: sliceW, h: remainingH, node: n, color });
-            curX += sliceW;
-            remainingW -= sliceW;
-        } else {
-            const sliceH = remainingH * ratio;
-            rects.push({ x: curX, y: curY, w: remainingW, h: sliceH, node: n, color });
-            curY += sliceH;
-            remainingH -= sliceH;
-        }
-
-        remainingSize -= n.size;
-    }
-
-    return rects;
-};
+const HEADER_H = 17;
+const isSynthetic = (n: ScanNode) => n.path.includes(".space-analyzer");
 
 export function TreemapView({ node }: TreemapViewProps) {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const fmt = useFormatBytes();
+    const sizeMode = useSizeMode();
     const containerRef = useRef<HTMLDivElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const overlayRef = useRef<HTMLCanvasElement>(null);
-    const currentPath = useScanStore((s) => s.currentPath);
-    const setCurrentPath = useScanStore((s) => s.setCurrentPath);
-    const [hoverNode, setHoverNode] = useState<ScanNode | null>(null);
-    const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
-    const rectsRef = useRef<Rect[]>([]);
+    const nodesRef = useRef<RNode[]>([]);
+    const seqRef = useRef(0);
 
-    // Stable color map per child name so colors are consistent
-    const colorMap = useRef<Map<string, string>>(new Map());
+    const setSearchQuery = useScanStore((s) => s.setSearchQuery);
+    const setViewMode = useScanStore((s) => s.setViewMode);
+    const navigateToAbsolutePath = useScanStore((s) => s.navigateToAbsolutePath);
+
+    const [rootPath, setRootPath] = useState(node.path);
+    const [data, setData] = useState<ScanNode | null>(null);
+    const [size, setSize] = useState({ w: 0, h: 0 });
+    const [hover, setHover] = useState<RNode | null>(null);
+    const [mouse, setMouse] = useState({ x: 0, y: 0 });
+    const [legendOpen, setLegendOpen] = useState(true);
+    const [exts, setExts] = useState<ExtStat[]>([]);
+
+    // the folder shown in the list/charts is the zoom root; re-anchor when it changes
+    useEffect(() => {
+        setRootPath(node.path);
+    }, [node.path]);
+
+    // fetch a pruned nested tree for the zoom root; keep showing the old one meanwhile
+    useEffect(() => {
+        const seq = ++seqRef.current;
+        invoke<ScanNode>("get_treemap", {
+            path: rootPath,
+            depth: 3,
+            minFraction: 0.0005,
+            maxNodes: 4000,
+            onDisk: sizeMode === "disk",
+        })
+            .then((d) => {
+                if (seq === seqRef.current) setData(d);
+            })
+            .catch((e) => console.error("get_treemap failed:", e));
+    }, [rootPath, sizeMode, node.size, node.alloc]);
 
     useEffect(() => {
-        const newMap = new Map<string, string>();
-        const sorted = [...node.children].sort((a, b) => b.size - a.size);
-        sorted.forEach((child, index) => {
-            if (child.is_dir) {
-                newMap.set(child.name, getDirColor(index));
-            } else {
-                newMap.set(child.name, getCategoryColor(child.category));
-            }
+        let cancelled = false;
+        invoke<ExtStat[]>("get_extension_stats", { n: 16 })
+            .then((v) => {
+                if (!cancelled) setExts(v);
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, [node.size]);
+
+    useEffect(() => {
+        const el = containerRef.current;
+        if (!el) return;
+        const ro = new ResizeObserver(() => {
+            const r = el.getBoundingClientRect();
+            setSize({ w: Math.floor(r.width), h: Math.floor(r.height) });
         });
-        colorMap.current = newMap;
-    }, [node]);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
 
-    useEffect(() => {
+    // d3 squarified layout (nested, with a header strip on every folder that has children)
+    const layout = useMemo(() => {
+        if (!data || size.w < 10 || size.h < 10) return [] as RNode[];
+        const root = hierarchy<ScanNode>(data, (d) => (d.children.length ? d.children : null))
+            .sum((d) => (d.children.length ? 0 : nodeSize(d, sizeMode)))
+            .sort((a, b) => (b.value ?? 0) - (a.value ?? 0));
+        if (!root.value) return [] as RNode[];
+        const laid = treemap<ScanNode>()
+            .tile(treemapSquarify)
+            .size([size.w, size.h])
+            .paddingOuter(2)
+            .paddingInner(1)
+            .paddingTop((d) => (d.depth > 0 && d.children ? HEADER_H : 2))(root);
+        return laid.descendants();
+    }, [data, size, sizeMode]);
+
+    nodesRef.current = layout;
+
+    // colors: each top-level folder gets a hue, files use their category; deeper = darker
+    const topIndex = useMemo(() => {
+        const m = new Map<ScanNode, number>();
+        layout[0]?.children?.forEach((c, i) => {
+            c.descendants().forEach((d) => m.set(d.data, i));
+        });
+        return m;
+    }, [layout]);
+
+    const draw = useCallback(() => {
         const canvas = canvasRef.current;
-        const container = containerRef.current;
-        if (!canvas || !container) return;
-
+        if (!canvas || size.w < 10) return;
+        const dpr = window.devicePixelRatio || 1;
+        canvas.width = size.w * dpr;
+        canvas.height = size.h * dpr;
+        canvas.style.width = `${size.w}px`;
+        canvas.style.height = `${size.h}px`;
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, size.w, size.h);
+        ctx.textBaseline = "middle";
 
-        const draw = (w: number, h: number) => {
-            ctx.clearRect(0, 0, w, h);
+        const clip = (text: string, maxW: number) => {
+            if (ctx.measureText(text).width <= maxW) return text;
+            let t = text;
+            while (t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+            return t + "…";
+        };
 
-            const totalSize = node.children.reduce((acc, c) => acc + c.size, 0);
-            if (totalSize === 0) return;
+        for (const n of layout) {
+            if (n.depth === 0) continue;
+            const w = n.x1 - n.x0;
+            const h = n.y1 - n.y0;
+            if (w < 2 || h < 2) continue;
+            const d = n.data;
+            const hasKids = !!n.children;
+            const base = d.is_dir
+                ? getDirColor(topIndex.get(d) ?? 0)
+                : isSynthetic(d)
+                  ? getCategoryColor("Other")
+                  : getCategoryColor(d.category);
 
-            const rects = layoutTreemap(node.children, totalSize, 0, 0, w, h, colorMap.current);
-            rectsRef.current = rects;
+            ctx.fillStyle = base;
+            ctx.fillRect(n.x0, n.y0, w, h);
+            const shade = Math.min(0.5, (n.depth - 1) * 0.13 + (hasKids ? 0.1 : 0));
+            if (shade > 0) {
+                ctx.fillStyle = `rgba(0,0,0,${shade})`;
+                ctx.fillRect(n.x0, n.y0, w, h);
+            }
+            if (isSynthetic(d)) {
+                ctx.fillStyle = "rgba(0,0,0,0.25)";
+                ctx.fillRect(n.x0, n.y0, w, h);
+            }
+            ctx.strokeStyle = "rgba(0,0,0,0.35)";
+            ctx.lineWidth = 1;
+            ctx.strokeRect(n.x0 + 0.5, n.y0 + 0.5, w - 1, h - 1);
 
-            for (const r of rects) {
-                if (r.w < 3 || r.h < 3) continue;
-                ctx.fillStyle = r.color;
-                ctx.globalAlpha = 1.0;
-
-                ctx.beginPath();
-                ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4);
-                ctx.fill();
-                ctx.globalAlpha = 1.0;
-
-                ctx.strokeStyle = "rgba(0,0,0,0.15)";
-                ctx.lineWidth = 1;
-                ctx.stroke();
-
-                // Draw text if enough space
-                if (r.w > 48 && r.h > 22) {
-                    // Name
-                    ctx.fillStyle = "rgba(255,255,255,0.92)";
-                    ctx.font = `bold ${Math.min(13, r.h / 4)}px system-ui, sans-serif`;
-                    ctx.textBaseline = "top";
-
-                    let text = r.node.name;
-                    while (ctx.measureText(text).width > r.w - 10 && text.length > 3) {
-                        text = text.slice(0, -1);
-                    }
-                    if (text !== r.node.name) text += "…";
-                    ctx.fillText(text, r.x + 6, r.y + 6);
-
-                    // Size label if tall enough
-                    if (r.h > 40) {
-                        ctx.fillStyle = "rgba(255,255,255,0.65)";
-                        ctx.font = `${Math.min(11, r.h / 5)}px system-ui, sans-serif`;
-                        ctx.fillText(formatBytes(r.node.size), r.x + 6, r.y + 22);
-                    }
+            if (hasKids) {
+                if (w > 36 && h > HEADER_H) {
+                    ctx.font = "600 11px system-ui, sans-serif";
+                    ctx.fillStyle = "rgba(255,255,255,0.95)";
+                    const label = `${d.name}  ${fmt(nodeSize(d, sizeMode))}`;
+                    ctx.fillText(clip(label, w - 8), n.x0 + 4, n.y0 + HEADER_H / 2 + 1);
+                }
+            } else if (w > 46 && h > 20) {
+                ctx.font = "600 11px system-ui, sans-serif";
+                ctx.fillStyle = "rgba(255,255,255,0.92)";
+                ctx.fillText(clip(d.name, w - 8), n.x0 + 4, n.y0 + 10);
+                if (h > 34) {
+                    ctx.font = "10px system-ui, sans-serif";
+                    ctx.fillStyle = "rgba(255,255,255,0.7)";
+                    ctx.fillText(clip(fmt(nodeSize(d, sizeMode)), w - 8), n.x0 + 4, n.y0 + 24);
                 }
             }
-        };
+        }
+    }, [layout, size, topIndex, fmt, sizeMode]);
 
-        const resize = () => {
-            const rect = container.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            canvas.style.width = `${rect.width}px`;
-            canvas.style.height = `${rect.height}px`;
-            ctx.scale(dpr, dpr);
-            draw(rect.width, rect.height);
-        };
-
-        const observer = new ResizeObserver(resize);
-        observer.observe(container);
-
-        // Initial draw in case dimensions exist
-        const rect = container.getBoundingClientRect();
-        if (rect.width && rect.height) resize();
-
-        return () => observer.disconnect();
-    }, [node]);
-
-    // Hover highlight lives on its own overlay canvas so mouse moves never trigger a full redraw.
     useEffect(() => {
-        const overlay = overlayRef.current;
-        const base = canvasRef.current;
-        if (!overlay || !base) return;
-        overlay.width = base.width;
-        overlay.height = base.height;
-        overlay.style.width = base.style.width;
-        overlay.style.height = base.style.height;
-        const ctx = overlay.getContext("2d");
-        if (!ctx || !hoverNode) return;
-        ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
-        const r = rectsRef.current.find((x) => x.node === hoverNode);
-        if (!r) return;
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
+        draw();
+    }, [draw]);
+
+    // hover outline on its own canvas so mouse moves never redraw the map
+    useEffect(() => {
+        const o = overlayRef.current;
+        if (!o) return;
+        const dpr = window.devicePixelRatio || 1;
+        o.width = size.w * dpr;
+        o.height = size.h * dpr;
+        o.style.width = `${size.w}px`;
+        o.style.height = `${size.h}px`;
+        const ctx = o.getContext("2d");
+        if (!ctx || !hover) return;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.strokeStyle = "rgba(255,255,255,0.95)";
         ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.roundRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2, 4);
-        ctx.stroke();
-    }, [hoverNode, node]);
+        ctx.strokeRect(hover.x0 + 1, hover.y0 + 1, hover.x1 - hover.x0 - 2, hover.y1 - hover.y0 - 2);
+    }, [hover, size]);
 
-    const handleMouseMove = (e: React.MouseEvent) => {
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const found = rectsRef.current.find(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-        if (found) {
-            setHoverNode(found.node);
-            setMousePos({ x: e.clientX, y: e.clientY });
-        } else {
-            setHoverNode(null);
+    const hit = (e: React.MouseEvent): RNode | null => {
+        const r = canvasRef.current?.getBoundingClientRect();
+        if (!r) return null;
+        const x = e.clientX - r.left;
+        const y = e.clientY - r.top;
+        const nodes = nodesRef.current;
+        // descendants() is breadth-first, so the last match is the deepest block
+        for (let i = nodes.length - 1; i > 0; i--) {
+            const n = nodes[i];
+            if (x >= n.x0 && x < n.x1 && y >= n.y0 && y < n.y1) return n;
         }
+        return null;
     };
 
-    const handleClick = (e: React.MouseEvent) => {
-        const rect = canvasRef.current?.getBoundingClientRect();
-        if (!rect) return;
-        const x = e.clientX - rect.left;
-        const y = e.clientY - rect.top;
-        const found = rectsRef.current.find(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
-        if (found && found.node.is_dir) {
-            setCurrentPath([...currentPath, found.node.name]);
-        }
+    const onMove = (e: React.MouseEvent) => {
+        const n = hit(e);
+        setHover((prev) => (prev === n ? prev : n));
+        setMouse({ x: e.clientX, y: e.clientY });
     };
 
-    const canGoBack = currentPath.length > 1;
-
-    const handleBack = () => {
-        if (canGoBack) {
-            setCurrentPath(currentPath.slice(0, -1));
-        }
+    const onClick = (e: React.MouseEvent) => {
+        const n = hit(e);
+        if (n && n.data.is_dir && !isSynthetic(n.data)) setRootPath(n.data.path);
     };
+
+    const atRoot = rootPath.toLowerCase() === node.path.toLowerCase();
+    const goUp = () => {
+        const i = rootPath.lastIndexOf("\\");
+        const parent = i > 2 ? rootPath.slice(0, i) : rootPath.slice(0, i + 1);
+        setRootPath(parent.length < node.path.length ? node.path : parent);
+    };
+
+    const rootTotal = layout[0]?.value ?? 0;
 
     return (
-        <div className="flex-1 flex flex-col w-full overflow-hidden">
-            {/* Treemap toolbar */}
-            {canGoBack && (
-                <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 shrink-0">
+        <div className="flex-1 flex flex-col w-full overflow-hidden min-h-0">
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-muted/20 shrink-0 min-w-0">
+                {!atRoot && (
                     <button
-                        onClick={handleBack}
-                        className="flex items-center gap-1.5 text-sm font-medium px-3 py-1 rounded-md bg-secondary hover:bg-muted transition-colors"
+                        onClick={goUp}
+                        className="flex items-center gap-1.5 text-sm font-medium px-3 py-1 rounded-md bg-secondary hover:bg-muted transition-colors shrink-0"
                     >
-                        <ChevronLeft size={15} /> Back
+                        <ChevronLeft size={15} /> Zoom out
                     </button>
-                    <span className="text-xs text-muted-foreground truncate">
-                        {currentPath.join(" › ")}
-                    </span>
+                )}
+                <span className="text-xs text-muted-foreground truncate flex-1" title={rootPath}>
+                    {rootPath}
+                </span>
+                {!atRoot && (
+                    <button
+                        onClick={() => navigateToAbsolutePath(rootPath)}
+                        title="Open this folder in the other views"
+                        className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-secondary hover:bg-muted transition-colors shrink-0"
+                    >
+                        <ExternalLink size={12} /> Open
+                    </button>
+                )}
+                <button
+                    onClick={() => setLegendOpen((v) => !v)}
+                    className="flex items-center gap-1 text-xs px-2 py-1 rounded-md bg-secondary hover:bg-muted transition-colors shrink-0"
+                >
+                    File types {legendOpen ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                </button>
+            </div>
+
+            {legendOpen && exts.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 max-h-20 overflow-y-auto">
+                    {exts.map((e) => (
+                        <button
+                            key={e.ext || "(none)"}
+                            onClick={() => {
+                                setSearchQuery(`ext:${e.ext}`);
+                                setViewMode("list");
+                            }}
+                            title={`${e.count.toLocaleString()} files. Click to list them.`}
+                            className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-secondary hover:bg-muted text-[11px] transition-colors"
+                        >
+                            <span className="w-2 h-2 rounded-full" style={{ background: getCategoryColor(e.category) }} />
+                            <span className="font-mono">{e.ext ? `.${e.ext}` : "(none)"}</span>
+                            <span className="text-muted-foreground">{fmt(sizeMode === "disk" ? e.alloc : e.size)}</span>
+                        </button>
+                    ))}
                 </div>
             )}
 
-            <div className="flex-1 relative" ref={containerRef}>
+            <div className="flex-1 relative min-h-0" ref={containerRef}>
                 <canvas
                     ref={canvasRef}
-                    onMouseMove={handleMouseMove}
-                    onMouseLeave={() => setHoverNode(null)}
-                    onClick={handleClick}
-                    className="absolute top-0 left-0 w-full h-full cursor-crosshair"
+                    onMouseMove={onMove}
+                    onMouseLeave={() => setHover(null)}
+                    onClick={onClick}
+                    className="absolute top-0 left-0 cursor-pointer"
                 />
                 <canvas ref={overlayRef} className="absolute top-0 left-0 pointer-events-none" />
 
-                {hoverNode && (
+                {hover && (
                     <div
-                        className="fixed pointer-events-none glass p-3 rounded-lg z-50 text-sm shadow-xl max-w-56"
+                        className="fixed pointer-events-none glass p-3 rounded-lg z-50 text-sm shadow-xl max-w-64"
                         style={{
-                            left: Math.min(mousePos.x + 14, window.innerWidth - 230),
-                            top: Math.min(mousePos.y + 14, window.innerHeight - 120),
+                            left: Math.min(mouse.x + 14, window.innerWidth - 270),
+                            top: Math.min(mouse.y + 14, window.innerHeight - 130),
                         }}
                     >
-                        <p className="font-semibold truncate">{hoverNode.name}</p>
-                        <p className="text-muted-foreground">{formatBytes(hoverNode.size)}</p>
-                        {hoverNode.file_count > 0 && (
-                            <p className="text-xs text-muted-foreground">{hoverNode.file_count.toLocaleString()} items</p>
+                        <p className="font-semibold truncate">{hover.data.name}</p>
+                        <p className="text-muted-foreground">
+                            {fmt(nodeSize(hover.data, sizeMode))}
+                            {rootTotal > 0 && (
+                                <span className="ml-1.5 text-xs">
+                                    ({(((hover.value ?? nodeSize(hover.data, sizeMode)) / rootTotal) * 100).toFixed(1)}%)
+                                </span>
+                            )}
+                        </p>
+                        {hover.data.file_count > 0 && (
+                            <p className="text-xs text-muted-foreground">{hover.data.file_count.toLocaleString()} items</p>
                         )}
-                        {hoverNode.is_dir && (
-                            <p className="text-xs text-primary mt-1">Click to drill down</p>
+                        {hover.data.is_dir && !isSynthetic(hover.data) && (
+                            <p className="text-xs text-primary mt-1">Click to zoom in</p>
                         )}
                     </div>
                 )}

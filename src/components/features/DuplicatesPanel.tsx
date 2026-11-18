@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Copy, Search, Trash2 } from "lucide-react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import { scheduleDeferredDeleteMany } from "../../lib/deferredDelete";
 import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
@@ -33,6 +33,7 @@ interface DuplicatesPanelProps {
 }
 
 export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
+    const fmt = useFormatBytes();
     const scanTree = useScanStore((s) => s.scanTree);
     const { addToast } = useToastStore();
     const [groups, setGroups] = useState<DuplicateGroup[]>([]);
@@ -154,7 +155,7 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                     <div>
                         <h2 className="text-lg font-bold tracking-tight">Duplicate Files</h2>
                         <p className="text-xs text-muted-foreground">
-                            {groups.length} groups · {formatBytes(totalWasted)} total wasted
+                            {groups.length} groups · {fmt(totalWasted)} total wasted
                         </p>
                     </div>
                 </div>
@@ -271,7 +272,7 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                                 </div>
                                 <div className="flex items-center gap-2 shrink-0">
                                     <span className="text-xs bg-amber-500/20 text-amber-500 px-2 py-0.5 rounded font-mono font-medium whitespace-nowrap">
-                                        {formatBytes(group.size)} each
+                                        {fmt(group.size)} each
                                     </span>
                                     <button
                                         type="button"

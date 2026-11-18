@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, FolderMinus, Sparkles, Trash2 } from "lucide-react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import { invoke } from "@tauri-apps/api/core";
 import { scheduleDeferredDeleteMany } from "../../lib/deferredDelete";
 import { useToastStore } from "../../stores/toastStore";
@@ -34,6 +34,7 @@ interface CleanupSuggestionsPanelProps {
 const ONE_GB = 1024 ** 3;
 
 export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProps) {
+    const fmt = useFormatBytes();
     const addToast = useToastStore((state) => state.addToast);
     const [safeMode, setSafeMode] = useState(true);
     const [confirmTarget, setConfirmTarget] = useState<Suggestion | null>(null);
@@ -103,7 +104,7 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
               const n = active.length;
               const bytes = active.reduce((a, f) => a + f.size, 0);
               const lines = [
-                  `This will move ${n.toLocaleString()} file(s) (${formatBytes(bytes)}) to the Recycle Bin.`,
+                  `This will move ${n.toLocaleString()} file(s) (${fmt(bytes)}) to the Recycle Bin.`,
                   bytes > ONE_GB
                       ? "Warning: total size is over 1 GB. Make sure you intend to remove this much data."
                       : null,
@@ -177,7 +178,7 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
                                     <h3 className="font-semibold truncate">{s.title}</h3>
                                 </div>
                                 <span className="font-mono text-sm font-bold text-primary shrink-0">
-                                    {formatBytes(s.totalSize)}
+                                    {fmt(s.totalSize)}
                                 </span>
                             </div>
                             <p className="text-sm text-muted-foreground leading-relaxed">{s.description}</p>
@@ -201,7 +202,7 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
                                 onClick={() => setConfirmTarget(s)}
                                 className="mt-1 w-full py-2 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 transition disabled:opacity-50 flex items-center justify-center gap-2"
                             >
-                                <Trash2 size={16} /> Clean {formatBytes(s.totalSize)}
+                                <Trash2 size={16} /> Clean {fmt(s.totalSize)}
                             </button>
                         </div>
                     ))

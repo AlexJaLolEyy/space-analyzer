@@ -1,11 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
-import { ArrowRight, Box, File, FolderOutput, HardDrive } from "lucide-react";
+import { ArrowRight, Box, Clock, File, FolderOutput, HardDrive, TrendingUp, Zap } from "lucide-react";
 import { getCategoryColor } from "../../lib/colors";
-import { formatBytes } from "../../lib/format";
+import { formatDelta, useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
 import { useScanStore } from "../../stores/scanStore";
-import type { ScanNode } from "../../types/scan";
+import type { ChangesSummary, ExtStat, ScanNode } from "../../types/scan";
 import { GaugeChart } from "../ui/GaugeChart";
 import type { Variants } from "framer-motion";
 
@@ -37,9 +38,53 @@ interface DashboardStatsPayload {
 }
 
 export function BentoDashboard({ onExplore }: BentoDashboardProps) {
+    const fmt = useFormatBytes();
+    const mode = useSizeMode();
     const scanTree = useScanStore((s) => s.scanTree);
     const selectedDrive = useScanStore((s) => s.selectedDrive);
+    const scanInfo = useScanStore((s) => s.scanInfo);
+    const deltasVersion = useScanStore((s) => s.deltasVersion);
+    const navigateToAbsolutePath = useScanStore((s) => s.navigateToAbsolutePath);
+    const setSearchQuery = useScanStore((s) => s.setSearchQuery);
+    const setViewMode = useScanStore((s) => s.setViewMode);
+    const [exts, setExts] = useState<ExtStat[]>([]);
     const [stats, setStats] = useState<DashboardStatsPayload | null>(null);
+    const [changes, setChanges] = useState<ChangesSummary | null>(null);
+
+    useEffect(() => {
+        if (!scanTree) {
+            setExts([]);
+            return;
+        }
+        let cancelled = false;
+        invoke<ExtStat[]>("get_extension_stats", { n: 8 })
+            .then((v) => {
+                if (!cancelled) setExts(v);
+            })
+            .catch(() => {});
+        return () => {
+            cancelled = true;
+        };
+    }, [scanTree, scanTree?.size]);
+
+    useEffect(() => {
+        if (!scanTree) {
+            setChanges(null);
+            return;
+        }
+        let cancelled = false;
+        void (async () => {
+            try {
+                const data = await invoke<ChangesSummary>("get_changes_summary", { n: 5 });
+                if (!cancelled) setChanges(data);
+            } catch (e) {
+                console.error("get_changes_summary failed:", e);
+            }
+        })();
+        return () => {
+            cancelled = true;
+        };
+    }, [scanTree, deltasVersion]);
 
     useEffect(() => {
         if (!scanTree) {
@@ -89,9 +134,9 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                     <div className="flex items-center gap-6 mt-auto relative z-10">
                         <GaugeChart used={stats.total_size} total={totalCapacity} />
                         <div className="flex flex-col gap-1">
-                            <span className="text-2xl font-bold">{formatBytes(stats.total_size)}</span>
+                            <span className="text-2xl font-bold">{fmt(stats.total_size)}</span>
                             <span className="text-sm text-muted-foreground whitespace-nowrap">
-                                of {formatBytes(totalCapacity)} capacity
+                                of {fmt(totalCapacity)} capacity
                             </span>
                         </div>
                     </div>
@@ -121,7 +166,7 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                                     {dir.name}
                                 </span>
                                 <span className="font-mono text-xs bg-primary/10 text-primary px-2 py-0.5 rounded shrink-0">
-                                    {formatBytes(dir.size)}
+                                    {fmt(nodeSize(dir, mode))}
                                 </span>
                             </div>
                         ))}
@@ -142,7 +187,7 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                                     />
                                     <span className="text-sm">{t.category}</span>
                                 </div>
-                                <span className="font-mono text-xs">{formatBytes(t.size)}</span>
+                                <span className="font-mono text-xs">{fmt(t.size)}</span>
                             </div>
                         ))}
                     </div>
@@ -162,11 +207,86 @@ export function BentoDashboard({ onExplore }: BentoDashboardProps) {
                             <p className="text-sm font-semibold truncate" title={largest_file.name}>
                                 {largest_file.name}
                             </p>
-                            <p className="text-xs text-primary font-mono mt-0.5">{formatBytes(largest_file.size)}</p>
+                            <p className="text-xs text-primary font-mono mt-0.5">{fmt(largest_file.size)}</p>
                         </>
                     ) : (
                         <p className="text-sm text-muted">No files found</p>
                     )}
+                </motion.div>
+
+                <motion.div variants={cardVariants} className="md:col-span-1 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col justify-center gap-1">
+                    <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+                        <Zap size={14} /> Scan engine
+                    </p>
+                    <p className="text-2xl font-bold tracking-tight">{scanInfo?.engine ?? "—"}</p>
+                    {scanInfo && (
+                        <p className="text-xs text-muted-foreground flex items-center gap-1">
+                            <Clock size={12} /> {(scanInfo.elapsedMs / 1000).toFixed(1)} s
+                        </p>
+                    )}
+                </motion.div>
+
+                <motion.div variants={cardVariants} className="md:col-span-2 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col gap-3">
+                    <h3 className="font-semibold flex items-center gap-2">
+                        <TrendingUp size={16} className="text-primary" />
+                        {changes?.since
+                            ? `${changes.origin === 1 ? "Since background snapshot" : "Since"} ${new Date(changes.since * 1000).toLocaleString()}`
+                            : "Changes since last scan"}
+                    </h3>
+                    {changes?.since ? (
+                        <>
+                            <p className={`text-2xl font-bold font-mono ${changes.total_delta > 0 ? "text-amber-500" : changes.total_delta < 0 ? "text-emerald-500" : ""}`}>
+                                {changes.total_delta === 0 ? "No change" : formatDelta(changes.total_delta, fmt)}
+                            </p>
+                            <div className="flex flex-col gap-1.5">
+                                {changes.top.map((n) => (
+                                    <button
+                                        key={n.path}
+                                        onClick={() => {
+                                            navigateToAbsolutePath(n.path);
+                                            onExplore();
+                                        }}
+                                        className="flex justify-between items-center text-sm p-2 rounded-lg bg-background/40 border border-border/20 hover:bg-muted/50 text-left"
+                                    >
+                                        <span className="truncate flex-1 mr-2" title={n.path}>{n.name}</span>
+                                        <span className={`font-mono text-xs shrink-0 ${(n.delta ?? 0) > 0 ? "text-amber-500" : "text-emerald-500"}`}>
+                                            {formatDelta(n.delta ?? 0, fmt)}
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </>
+                    ) : (
+                        <p className="text-sm text-muted-foreground">
+                            Scan this location again later and the biggest changes will show up here.
+                        </p>
+                    )}
+                </motion.div>
+
+                <motion.div variants={cardVariants} className="md:col-span-1 bg-secondary/30 border border-border/50 rounded-3xl p-5 shadow-sm flex flex-col gap-3">
+                    <h3 className="font-semibold flex items-center gap-2">
+                        <File size={16} className="text-primary" /> Top file types
+                    </h3>
+                    <div className="flex flex-col gap-1.5">
+                        {exts.map((e) => (
+                            <button
+                                key={e.ext || "(none)"}
+                                onClick={() => {
+                                    setSearchQuery(`ext:${e.ext}`);
+                                    setViewMode("list");
+                                    onExplore();
+                                }}
+                                title={`${e.count.toLocaleString()} files`}
+                                className="flex justify-between items-center text-sm px-2 py-1 rounded-lg hover:bg-muted/50 text-left"
+                            >
+                                <span className="flex items-center gap-2 min-w-0">
+                                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: getCategoryColor(e.category) }} />
+                                    <span className="font-mono truncate">{e.ext ? `.${e.ext}` : "(none)"}</span>
+                                </span>
+                                <span className="font-mono text-xs shrink-0">{fmt(mode === "disk" ? e.alloc : e.size)}</span>
+                            </button>
+                        ))}
+                    </div>
                 </motion.div>
             </div>
         </motion.div>

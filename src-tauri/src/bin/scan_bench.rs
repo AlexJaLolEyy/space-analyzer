@@ -48,7 +48,7 @@ fn run(path: &str, force: Option<Engine>) -> Result<RunResult, String> {
         }
     };
     let cancel = Arc::new(AtomicBool::new(false));
-    let out = scan_path(path, force, &cancel, &progress)?;
+    let out = scan_path(path, force, &cancel, &progress, &[])?;
     let a = &out.arena;
     Ok(RunResult {
         engine: out.engine,

@@ -4,6 +4,8 @@ pub mod models;
 pub mod scan;
 pub mod scan_session;
 pub mod scan_stream;
+pub mod search;
+pub mod snapshot;
 pub mod utils;
 
 use std::path::PathBuf;
@@ -47,23 +49,23 @@ pub fn run() {
             commands::tree_api::search_nodes,
             commands::tree_api::get_top_files,
             commands::tree_api::get_category_breakdown,
-            commands::tree_api::get_black_holes,
+            commands::tree_api::get_top_folders,
+            commands::tree_api::get_extension_stats,
+            commands::tree_api::get_treemap,
+            commands::tree_api::get_biggest_changes,
+            commands::tree_api::get_changes_summary,
             commands::tree_api::get_dashboard_stats,
             commands::tree_api::get_export_subtree,
             commands::tree_api::export_scan,
             commands::tree_api::get_cleanup_candidates,
             commands::scanner::cancel_scan,
+            commands::scanner::rescan_subtree,
             commands::scanner::get_privilege_status,
             commands::scanner::relaunch_as_admin,
             commands::file_ops::delete_item,
             commands::file_ops::delete_items,
             commands::duplicates::find_duplicates,
-            commands::duplicates::cancel_duplicate_scan,
-            commands::history::save_scan,
-            commands::history::list_scans,
-            commands::history::load_scan,
-            commands::history::delete_scan_history,
-            commands::history::compare_scans
+            commands::duplicates::cancel_duplicate_scan
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

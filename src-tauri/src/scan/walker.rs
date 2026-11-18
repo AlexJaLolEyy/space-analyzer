@@ -3,7 +3,7 @@
 //! attributes and mtime together. Directories are processed by a work-stealing pool and
 //! results are collected in per-directory batches that are merged into columns at the end.
 
-use super::{is_cancelled, Progress, ProgressFn, RawScan, F_DIR, F_USED, NONE};
+use super::{is_cancelled, norm_path_lower, Excluded, Progress, ProgressFn, RawScan, F_DIR, F_USED, NONE};
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -36,7 +36,8 @@ struct Batch {
     names: Vec<u8>,
 }
 
-struct Ctx {
+struct Ctx<'a> {
+    excluded: &'a Excluded,
     cancel: Arc<AtomicBool>,
     next_id: AtomicU32,
     batches: Mutex<Vec<Batch>>,
@@ -87,7 +88,7 @@ fn rd_i64(b: &[u8], o: usize) -> i64 {
 
 /// Lists one directory. Returns the batch (ids not assigned yet) and subdirectories to descend into
 /// as `(index in batch, wide path)`.
-fn list_dir(wide_dir: &[u16]) -> (Batch, Vec<(u32, Vec<u16>)>) {
+fn list_dir(wide_dir: &[u16], ex: &Excluded) -> (Batch, Vec<(u32, Vec<u16>)>) {
     let mut batch = Batch {
         base_id: 0,
         parent: 0,
@@ -116,6 +117,16 @@ fn list_dir(wide_dir: &[u16]) -> (Batch, Vec<(u32, Vec<u16>)>) {
     if handle == INVALID_HANDLE_VALUE {
         return (batch, subdirs);
     }
+
+    let dir_lower = if ex.is_empty() { String::new() } else { norm_path_lower(&String::from_utf16_lossy(wide_dir)) };
+    let local_abs = if ex.is_empty() { Vec::new() } else { ex.names_in_dir(&dir_lower) };
+    let is_excluded = |units: &[u16]| -> bool {
+        if ex.is_empty() {
+            return false;
+        }
+        let n = String::from_utf16_lossy(units);
+        ex.matches_name(&n) || local_abs.iter().any(|l| Excluded::name_eq(l, &n))
+    };
 
     LIST_BUF.with(|cell| {
         let mut buf = cell.borrow_mut();
@@ -149,7 +160,7 @@ fn list_dir(wide_dir: &[u16]) -> (Batch, Vec<(u32, Vec<u16>)>) {
                         .collect();
                     let is_dot = (units.len() == 1 && units[0] == b'.' as u16)
                         || (units.len() == 2 && units[0] == b'.' as u16 && units[1] == b'.' as u16);
-                    if !is_dot {
+                    if !is_dot && !is_excluded(&units) {
                         let attrs = rd_u32(&buf, off + 56);
                         let is_dir = attrs & ATTR_DIRECTORY != 0;
                         let mtime = filetime_to_unix(rd_i64(&buf, off + 24));
@@ -200,11 +211,11 @@ fn list_dir(wide_dir: &[u16]) -> (Batch, Vec<(u32, Vec<u16>)>) {
     (batch, subdirs)
 }
 
-fn walk<'s>(scope: &rayon::Scope<'s>, ctx: &'s Ctx, wide_dir: Vec<u16>, dir_id: u32) {
+fn walk<'s>(scope: &rayon::Scope<'s>, ctx: &'s Ctx<'s>, wide_dir: Vec<u16>, dir_id: u32) {
     if is_cancelled(&ctx.cancel) {
         return;
     }
-    let (mut batch, subdirs) = list_dir(&wide_dir);
+    let (mut batch, subdirs) = list_dir(&wide_dir, ctx.excluded);
     let count = batch.flags.len() as u32;
     if count == 0 {
         return;
@@ -237,9 +248,11 @@ pub fn scan(
     cancel: &Arc<AtomicBool>,
     progress: ProgressFn,
     start: Instant,
+    excluded: &Excluded,
 ) -> Result<RawScan, String> {
     let root_path = path.to_string();
     let ctx = Ctx {
+        excluded,
         cancel: Arc::clone(cancel),
         next_id: AtomicU32::new(1),
         batches: Mutex::new(Vec::new()),
@@ -307,6 +320,7 @@ pub fn scan(
         names: Vec::with_capacity(names_total),
         root: 0,
         root_path,
+        mft_meta: None,
     };
     raw.flags[0] = F_DIR | F_USED;
 

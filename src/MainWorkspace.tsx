@@ -1,17 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertOctagon, Copy, Download, FolderOpen, FolderSearch, Grid2X2, History, List, RotateCcw, Sparkles } from "lucide-react";
+import { ArrowUpDown, Copy, Download, FolderOpen, FolderSearch, Grid2X2, HardDrive, RotateCcw, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { DriveSelector } from "./components/drive/DriveSelector";
 import { BentoDashboard } from "./components/features/BentoDashboard";
-import { BlackHolesPanel } from "./components/features/BlackHolesPanel";
 import { CleanupSuggestionsPanel } from "./components/features/CleanupSuggestionsPanel";
 import { DuplicatesPanel } from "./components/features/DuplicatesPanel";
 import { ExportDialog } from "./components/features/ExportDialog";
-import { ScanCompareView } from "./components/features/ScanCompareView";
-import { ScanHistoryPanel } from "./components/features/ScanHistoryPanel";
 import { TopFilesPanel } from "./components/features/TopFilesPanel";
 import { ScanProgress } from "./components/scan/ScanProgress";
 import { ScanSummary } from "./components/scan/ScanSummary";
@@ -20,41 +18,43 @@ import { ConfirmModal } from "./components/ui/ConfirmModal";
 import { SelectionActionBar } from "./components/ui/SelectionActionBar";
 import { ViewContainer } from "./components/views/ViewContainer";
 import { useScan } from "./hooks/useScan";
+import { refreshRootAndCurrent } from "./lib/refresh";
 import { useScanStore } from "./stores/scanStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useToastStore } from "./stores/toastStore";
 import { useUiStore } from "./stores/uiStore";
 import type { DriveInfo } from "./types/drive";
-import type { ScanDiff } from "./types/history";
-import type { ScanNode } from "./types/scan";
+
+const VIEW_KEYS = ["list", "pie", "bar", "treemap"] as const;
 
 export function MainWorkspace() {
     const { startScan, cancelScan, isScanning, progress, error } = useScan();
     const scanTree = useScanStore((s) => s.scanTree);
+    const scanInfo = useScanStore((s) => s.scanInfo);
     const reset = useScanStore((s) => s.reset);
     const currentPath = useScanStore((s) => s.currentPath);
     const setSkipElevationPrompt = useSettingsStore((s) => s.setSkipElevationPrompt);
+    const sizeMode = useSettingsStore((s) => s.sizeMode);
+    const setSizeMode = useSettingsStore((s) => s.setSizeMode);
     const [dontAskAgain, setDontAskAgain] = useState(false);
     const showElevationDialog = useUiStore((s) => s.showElevationDialog);
     const setShowElevationDialog = useUiStore((s) => s.setShowElevationDialog);
+    const setShowSettings = useUiStore((s) => s.setShowSettings);
     const isElevated = useUiStore((s) => s.isElevated);
     const setIsElevated = useUiStore((s) => s.setIsElevated);
     const [elevateLoading, setElevateLoading] = useState(false);
     const [targetPath, setTargetPath] = useState<string | null>(null);
     const [pathInput, setPathInput] = useState("");
     const [showPathInput, setShowPathInput] = useState(false);
-    const [showTopFiles, setShowTopFiles] = useState(false);
+    const [showLargest, setShowLargest] = useState(false);
     const [showExport, setShowExport] = useState(false);
     const [showDuplicates, setShowDuplicates] = useState(false);
-    const [showBlackHoles, setShowBlackHoles] = useState(false);
     const [showCancelModal, setShowCancelModal] = useState(false);
     const [showDashboard, setShowDashboard] = useState(true);
-    const [showHistory, setShowHistory] = useState(false);
     const [showCleanup, setShowCleanup] = useState(false);
-    const [compareData, setCompareData] = useState<ScanDiff | null>(null);
     const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
     const [dragHighlight, setDragHighlight] = useState(false);
-    const addToast = useToastStore(s => s.addToast);
+    const addToast = useToastStore((s) => s.addToast);
 
     useEffect(() => {
         let mounted = true;
@@ -72,6 +72,21 @@ export function MainWorkspace() {
         return () => {
             mounted = false;
         };
+    }, [setIsElevated, setShowElevationDialog]);
+
+    // background deltas finished: refresh badges and the dashboard card
+    useEffect(() => {
+        if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+        let unlisten: (() => void) | undefined;
+        listen("deltas-ready", () => {
+            useScanStore.getState().bumpDeltasVersion();
+            void refreshRootAndCurrent();
+        })
+            .then((u) => {
+                unlisten = u;
+            })
+            .catch(() => {});
+        return () => unlisten?.();
     }, []);
 
     useEffect(() => {
@@ -85,12 +100,8 @@ export function MainWorkspace() {
                 if (t === "drop") {
                     setDragHighlight(false);
                     if (isScanning) return;
-                    const paths = event.payload.paths;
-                    const p = paths[0];
+                    const p = event.payload.paths[0];
                     if (p) {
-                        if (import.meta.env.DEV) {
-                            console.log("[drag-drop] dropped path:", p);
-                        }
                         setTargetPath(p);
                         startScan(p);
                     }
@@ -109,7 +120,7 @@ export function MainWorkspace() {
         const path = drive.mount_point;
         useScanStore.getState().setSelectedDrive({
             total_bytes: drive.total_bytes,
-            name: drive.name || drive.mount_point
+            name: drive.name || drive.mount_point,
         });
         setTargetPath(path);
         startScan(path);
@@ -142,40 +153,22 @@ export function MainWorkspace() {
         }
     };
 
-    const handleLoadScan = async (id: string) => {
-        try {
-            const tree = await invoke<ScanNode>("load_scan", { id });
-            useScanStore.getState().setScanTree(tree);
-            setShowHistory(false);
-            setShowDashboard(true);
-            setCompareData(null);
-            addToast("success", "Scan loaded from history");
-        } catch (err: any) {
-            addToast("error", `Failed to load scan: ${err}`);
-        }
-    };
-
-    const handleCompare = async (idA: string, idB: string) => {
-        try {
-            const diff = await invoke<ScanDiff>("compare_scans", { idA, idB });
-            setCompareData(diff);
-            setShowHistory(false);
-        } catch (err: any) {
-            addToast("error", `Failed to compare scans: ${err}`);
-        }
-    };
-
     const handleReset = useCallback(() => {
         reset();
         setTargetPath(null);
         setPathInput("");
         setShowPathInput(false);
-        setShowTopFiles(false);
+        setShowLargest(false);
         setShowExport(false);
         setShowDashboard(true);
     }, [reset]);
 
-    // Global keyboard shortcuts (Phase 6)
+    const focusSearch = () => {
+        const el = document.querySelector('input[placeholder^="Search"]') as HTMLInputElement | null;
+        el?.focus();
+    };
+
+    // Global keyboard shortcuts
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             if (e.key === "Escape") {
@@ -184,30 +177,34 @@ export function MainWorkspace() {
                     setCommandPaletteOpen(false);
                     return;
                 }
-                if (showPathInput) { setShowPathInput(false); return; }
+                if (showPathInput) {
+                    setShowPathInput(false);
+                    return;
+                }
                 if (scanTree && currentPath.length > 1) {
                     useScanStore.getState().setCurrentPath(currentPath.slice(0, -1));
                 }
             }
 
-            // Ctrl/Cmd shortcuts
             if (e.ctrlKey || e.metaKey) {
                 switch (e.key.toLowerCase()) {
-                    case 'd':
+                    case ",":
                         e.preventDefault();
-                        if (scanTree) setShowDashboard(v => !v);
+                        setShowSettings(true);
                         break;
-                    case 'e':
+                    case "d":
+                        e.preventDefault();
+                        if (scanTree) setShowDashboard((v) => !v);
+                        break;
+                    case "e":
                         e.preventDefault();
                         if (scanTree) setShowExport(true);
                         break;
-                    case 'f':
+                    case "f":
                         e.preventDefault();
-                        // Focus on search input by finding it conceptually or ref 
-                        const searchInput = document.querySelector('input[placeholder="Search tree… (Ctrl+F)"]') as HTMLInputElement;
-                        if (searchInput) searchInput.focus();
+                        focusSearch();
                         break;
-                    case 'backspace':
+                    case "backspace":
                         e.preventDefault();
                         if (scanTree && currentPath.length > 1) {
                             useScanStore.getState().setCurrentPath(currentPath.slice(0, -1));
@@ -215,22 +212,19 @@ export function MainWorkspace() {
                         break;
                 }
             } else {
-                // Number shortcuts for view modes
-                if (document.activeElement?.tagName === 'INPUT') return;
-
+                if (document.activeElement?.tagName === "INPUT") return;
                 if (scanTree && !showDashboard) {
-                    const views = ['list', 'pie', 'bar', 'treemap', 'sunburst'];
                     const num = parseInt(e.key);
-                    if (num >= 1 && num <= 5) {
+                    if (num >= 1 && num <= VIEW_KEYS.length) {
                         e.preventDefault();
-                        useScanStore.getState().setViewMode(views[num - 1] as any);
+                        useScanStore.getState().setViewMode(VIEW_KEYS[num - 1]);
                     }
                 }
             }
         };
         window.addEventListener("keydown", onKey);
         return () => window.removeEventListener("keydown", onKey);
-    }, [showPathInput, scanTree, currentPath, showDashboard, commandPaletteOpen]);
+    }, [showPathInput, scanTree, currentPath, showDashboard, commandPaletteOpen, setShowSettings]);
 
     if (error) {
         return (
@@ -256,6 +250,9 @@ export function MainWorkspace() {
         );
     }
 
+    const headerButton = (active: boolean) =>
+        `flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${active ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"}`;
+
     return (
         <div className="flex flex-col h-full w-full relative overflow-hidden">
             {dragHighlight && !isScanning && (
@@ -273,16 +270,12 @@ export function MainWorkspace() {
                 onOpenExport={() => setShowExport(true)}
                 onToggleDuplicates={() => setShowDuplicates((v) => !v)}
                 onToggleDashboard={() => setShowDashboard((v) => !v)}
-                onFocusSearch={() => {
-                    const el = document.querySelector('input[placeholder="Search tree… (Ctrl+F)"]') as HTMLInputElement | null;
-                    el?.focus();
-                }}
+                onFocusSearch={focusSearch}
                 onOpenCustomPath={() => {
                     setShowPathInput(true);
                     setShowDashboard(false);
                 }}
                 onNewScan={handleReset}
-                onOpenHistory={() => setShowHistory(true)}
                 duplicatesOpen={showDuplicates}
                 dashboardVisible={showDashboard}
             />
@@ -304,142 +297,137 @@ export function MainWorkspace() {
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         transition={{ duration: 0.25 }}
-                        className="flex-1 flex flex-col w-full h-full"
+                        className="flex-1 flex flex-col w-full h-full min-h-0"
                     >
+                        {/* Results header: always visible, above both the overview and the views */}
+                        <div className="flex items-center justify-between px-5 py-3 border-b border-border/60 bg-background/70 backdrop-blur-md gap-4 flex-wrap shrink-0">
+                            <div className="flex flex-col gap-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                    <FolderSearch size={16} className="text-primary shrink-0" />
+                                    <h2 className="text-sm font-bold tracking-tight truncate" title={scanTree.name}>
+                                        {scanTree.name}
+                                    </h2>
+                                    {scanInfo && (
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-secondary text-muted-foreground">
+                                            {scanInfo.engine}
+                                        </span>
+                                    )}
+                                </div>
+                                {isElevated === false && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowElevationDialog(true)}
+                                        className="text-[11px] text-muted-foreground hover:text-foreground text-left underline-offset-2 hover:underline"
+                                    >
+                                        Standard mode. Enable Turbo (admin) for much faster scans.
+                                    </button>
+                                )}
+                            </div>
+
+                            <ScanSummary tree={scanTree} />
+
+                            <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                                <AnimatePresence>
+                                    {showPathInput && (
+                                        <motion.form
+                                            initial={{ width: 0, opacity: 0 }}
+                                            animate={{ width: 220, opacity: 1 }}
+                                            exit={{ width: 0, opacity: 0 }}
+                                            transition={{ duration: 0.2 }}
+                                            onSubmit={handleCustomPath}
+                                            className="overflow-hidden"
+                                        >
+                                            <input
+                                                autoFocus
+                                                type="text"
+                                                value={pathInput}
+                                                onChange={(e) => setPathInput(e.target.value)}
+                                                placeholder="C:\Custom\Path"
+                                                className="w-full text-sm px-3 py-1.5 rounded-lg bg-secondary border border-border focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                                            />
+                                        </motion.form>
+                                    )}
+                                </AnimatePresence>
+                                <div className="flex rounded-lg overflow-hidden border border-border text-xs font-medium" title="Show logical size or size on disk (allocated clusters)">
+                                    <button
+                                        onClick={() => setSizeMode("logical")}
+                                        className={`px-2.5 py-1.5 transition-colors ${sizeMode === "logical" ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"}`}
+                                    >
+                                        Size
+                                    </button>
+                                    <button
+                                        onClick={() => setSizeMode("disk")}
+                                        className={`px-2.5 py-1.5 transition-colors flex items-center gap-1 ${sizeMode === "disk" ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"}`}
+                                    >
+                                        <HardDrive size={12} /> On disk
+                                    </button>
+                                </div>
+                                <button
+                                    onClick={() => setShowLargest((v) => !v)}
+                                    title="Largest files and folders"
+                                    className={headerButton(showLargest)}
+                                >
+                                    <ArrowUpDown size={14} /> Largest
+                                </button>
+                                <button
+                                    onClick={() => setShowDuplicates((v) => !v)}
+                                    title="Find Duplicate Files"
+                                    className={headerButton(showDuplicates)}
+                                >
+                                    <Copy size={14} /> Duplicates
+                                </button>
+                                <button onClick={() => setShowCleanup((v) => !v)} title="Smart Cleanup" className={headerButton(showCleanup)}>
+                                    <Sparkles size={14} /> Cleanup
+                                </button>
+                                <button
+                                    onClick={() => setShowExport(true)}
+                                    title="Export scan results (Ctrl+E)"
+                                    className={headerButton(false)}
+                                >
+                                    <Download size={14} /> Export
+                                </button>
+                                <button onClick={handleBrowse} title="Choose a folder to scan" className={headerButton(false)}>
+                                    <FolderOpen size={14} /> Browse
+                                </button>
+                                <button
+                                    onClick={() => setShowPathInput((v) => !v)}
+                                    title="Scan custom folder path"
+                                    className={headerButton(false)}
+                                >
+                                    <FolderSearch size={14} /> Custom
+                                </button>
+                                <button
+                                    onClick={() => setShowDashboard((v) => !v)}
+                                    title="Toggle Dashboard (Ctrl+D)"
+                                    className={headerButton(showDashboard)}
+                                >
+                                    <Grid2X2 size={14} /> Dashboard
+                                </button>
+                                <button
+                                    onClick={handleReset}
+                                    title="Back to Drives"
+                                    className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors font-medium"
+                                >
+                                    <RotateCcw size={14} /> New Scan
+                                </button>
+                            </div>
+                        </div>
+
                         {showDashboard ? (
                             <BentoDashboard onExplore={() => setShowDashboard(false)} />
                         ) : (
-                            <>
-                                {/* Results header */}
-                                <div className="flex items-center justify-between px-5 py-3 border-b border-border/60 bg-background/70 backdrop-blur-md gap-4 flex-wrap shrink-0">
-                                    <div className="flex flex-col gap-1 min-w-0">
-                                        <div className="flex items-center gap-2">
-                                            <FolderSearch size={16} className="text-primary shrink-0" />
-                                            <h2 className="text-sm font-bold tracking-tight truncate" title={scanTree.name}>
-                                                {scanTree.name}
-                                            </h2>
-                                        </div>
-                                        {isElevated === false && (
-                                            <button
-                                                type="button"
-                                                onClick={() => setShowElevationDialog(true)}
-                                                className="text-[11px] text-muted-foreground hover:text-foreground text-left underline-offset-2 hover:underline"
-                                            >
-                                                Standard mode. Enable Turbo (admin) for much faster scans.
-                                            </button>
-                                        )}
-                                    </div>
-
-                                    <ScanSummary tree={scanTree} />
-
-                                    <div className="flex items-center gap-2 shrink-0">
-                                        <AnimatePresence>
-                                            {showPathInput && (
-                                                <motion.form
-                                                    initial={{ width: 0, opacity: 0 }}
-                                                    animate={{ width: 220, opacity: 1 }}
-                                                    exit={{ width: 0, opacity: 0 }}
-                                                    transition={{ duration: 0.2 }}
-                                                    onSubmit={handleCustomPath}
-                                                    className="overflow-hidden"
-                                                >
-                                                    <input
-                                                        autoFocus
-                                                        type="text"
-                                                        value={pathInput}
-                                                        onChange={e => setPathInput(e.target.value)}
-                                                        placeholder="C:\Custom\Path"
-                                                        className="w-full text-sm px-3 py-1.5 rounded-lg bg-secondary border border-border focus:outline-none focus:ring-2 focus:ring-ring font-mono"
-                                                    />
-                                                </motion.form>
-                                            )}
-                                        </AnimatePresence>
-                                        <button
-                                            onClick={() => setShowTopFiles(v => !v)}
-                                            title="Top 100 largest files"
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${showTopFiles ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"
-                                                }`}
-                                        >
-                                            <List size={14} /> Top Files
-                                        </button>
-                                        <button
-                                            onClick={() => setShowDuplicates(v => !v)}
-                                            title="Find Duplicate Files"
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${showDuplicates ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"
-                                                }`}
-                                        >
-                                            <Copy size={14} /> Duplicates
-                                        </button>
-                                        <button
-                                            onClick={() => setShowHistory(true)}
-                                            title="View saved scans"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium bg-secondary hover:bg-muted"
-                                        >
-                                            <History size={14} /> History
-                                        </button>
-                                        <button
-                                            onClick={() => setShowBlackHoles(v => !v)}
-                                            title="Find Black Holes (Deep massive folders)"
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${showBlackHoles ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"
-                                                }`}
-                                        >
-                                            <AlertOctagon size={14} /> Black Holes
-                                        </button>
-                                        <button
-                                            onClick={() => setShowCleanup(v => !v)}
-                                            title="Smart Cleanup"
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${showCleanup ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"}`}
-                                        >
-                                            <Sparkles size={14} /> Cleanup
-                                        </button>
-                                        <button
-                                            onClick={() => setShowExport(true)}
-                                            title="Export scan results (Ctrl+E)"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
-                                        >
-                                            <Download size={14} /> Export
-                                        </button>
-                                        <button
-                                            onClick={handleBrowse}
-                                            title="Choose a folder to scan"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
-                                        >
-                                            <FolderOpen size={14} /> Browse
-                                        </button>
-                                        <button
-                                            onClick={() => setShowPathInput(v => !v)}
-                                            title="Scan custom folder path"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
-                                        >
-                                            <FolderSearch size={14} /> Custom
-                                        </button>
-                                        <button
-                                            onClick={() => setShowDashboard(v => !v)}
-                                            title="Toggle Dashboard (Ctrl+D)"
-                                            className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-lg transition-colors font-medium ${showDashboard ? "bg-primary text-primary-foreground" : "bg-secondary hover:bg-muted"}`}
-                                        >
-                                            <Grid2X2 size={14} /> Dashboard
-                                        </button>
-                                        <button
-                                            onClick={handleReset}
-                                            title="Back to Drives"
-                                            className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors font-medium"
-                                        >
-                                            <RotateCcw size={14} /> New Scan
-                                        </button>
-                                    </div>
-                                </div>
-
-                                <div className="flex-1 relative overflow-hidden flex flex-col min-h-0">
-                                    <ViewContainer />
-                                </div>
-                            </>
+                            <div className="flex-1 relative overflow-hidden flex flex-col min-h-0">
+                                <ViewContainer />
+                            </div>
                         )}
                     </motion.div>
-                ) : compareData ? (
-                    <ScanCompareView key="compare" diff={compareData} onClose={() => setCompareData(null)} />
                 ) : (
-                    <DriveSelector key="drive" onDriveSelected={handleDriveClick} onBrowse={handleBrowse} onCustomPath={scanCustomPath} onOpenHistory={() => setShowHistory(true)} />
+                    <DriveSelector
+                        key="drive"
+                        onDriveSelected={handleDriveClick}
+                        onBrowse={handleBrowse}
+                        onCustomPath={scanCustomPath}
+                    />
                 )}
             </AnimatePresence>
 
@@ -483,18 +471,10 @@ export function MainWorkspace() {
             />
 
             <AnimatePresence>
-                {showTopFiles && <TopFilesPanel onClose={() => setShowTopFiles(false)} />}
+                {showLargest && <TopFilesPanel onClose={() => setShowLargest(false)} />}
                 {showDuplicates && <DuplicatesPanel onClose={() => setShowDuplicates(false)} />}
-                {showBlackHoles && <BlackHolesPanel onClose={() => setShowBlackHoles(false)} />}
                 {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
                 {showCleanup && <CleanupSuggestionsPanel onClose={() => setShowCleanup(false)} />}
-                {showHistory && (
-                    <ScanHistoryPanel
-                        onClose={() => setShowHistory(false)}
-                        onLoadScan={handleLoadScan}
-                        onCompare={handleCompare}
-                    />
-                )}
             </AnimatePresence>
         </div>
     );

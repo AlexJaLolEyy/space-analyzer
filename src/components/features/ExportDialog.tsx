@@ -3,7 +3,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 import { motion } from "framer-motion";
 import { CheckCircle2, Download, FileText as FileCsv, FileJson, X } from "lucide-react";
 import { useState } from "react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 interface ExportDialogProps {
@@ -11,6 +11,7 @@ interface ExportDialogProps {
 }
 
 export function ExportDialog({ onClose }: ExportDialogProps) {
+    const fmt = useFormatBytes();
     const scanTree = useScanStore((s) => s.scanTree);
     const currentNode = useScanStore((s) => findNodeByPath(s.scanTree, s.currentPath) ?? s.scanTree);
     const addToast = useToastStore((s) => s.addToast);
@@ -118,7 +119,7 @@ export function ExportDialog({ onClose }: ExportDialogProps) {
                         {labelNode && (
                             <div className="px-3 py-2 bg-secondary/50 rounded-lg text-xs text-muted-foreground">
                                 <span className="font-medium text-foreground">{labelNode.name}</span>
-                                {" · "}{formatBytes(labelNode.size)}, {labelNode.file_count.toLocaleString()} files
+                                {" · "}{fmt(labelNode.size)}, {labelNode.file_count.toLocaleString()} files
                                 <span className="block mt-1 opacity-80">Export pulls the full subtree from the backend.</span>
                             </div>
                         )}

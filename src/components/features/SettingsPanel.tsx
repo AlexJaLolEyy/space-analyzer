@@ -28,6 +28,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         sizeUnit, setSizeUnit,
         defaultViewMode, setDefaultViewMode,
         excludedPaths, addExcludedPath, removeExcludedPath,
+        skipElevationPrompt, setSkipElevationPrompt,
     } = useSettingsStore();
 
     const [activeTab, setActiveTab] = useState<"general" | "appearance" | "exclusions" | "about">("appearance");
@@ -142,7 +143,6 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                         <option value="pie">Pie Chart</option>
                                         <option value="bar">Bar Chart</option>
                                         <option value="treemap">Treemap</option>
-                                        <option value="sunburst">Sunburst</option>
                                     </select>
                                 </div>
 
@@ -169,7 +169,20 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                         ))}
                                     </div>
                                 </div>
-                            </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold mb-1">Turbo prompt</label>
+                                    <p className="text-xs text-muted-foreground mb-3">Offer to restart as administrator for fast MFT scans when the app starts in Standard mode.</p>
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            className="accent-primary"
+                                            checked={!skipElevationPrompt}
+                                            onChange={(e) => setSkipElevationPrompt(!e.target.checked)}
+                                        />
+                                        Ask to enable Turbo on start
+                                    </label>
+                                </div>                            </div>
                         )}
 
                         {/* ── Exclusions ── */}
@@ -177,7 +190,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                             <div className="space-y-4">
                                 <div>
                                     <h3 className="text-sm font-semibold mb-1">Excluded Paths</h3>
-                                    <p className="text-xs text-muted-foreground mb-4">Folder names or path prefixes that will be skipped during scans.</p>
+                                    <p className="text-xs text-muted-foreground mb-4">Skipped during scans. A name (e.g. node_modules) matches anywhere; a full path (e.g. C:\Users\me\Videos) excludes that folder. Case-insensitive; applies to the next scan.</p>
                                 </div>
 
                                 <div className="flex gap-2">

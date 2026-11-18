@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Activity, FileText, HardDrive, Timer } from "lucide-react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import type { ScanProgress } from "../../types/scan";
 
 interface ScanStatsProps {
@@ -8,6 +8,7 @@ interface ScanStatsProps {
 }
 
 export function ScanStats({ progress }: ScanStatsProps) {
+    const fmt = useFormatBytes();
     const elapsedSeconds = progress.elapsed_ms / 1000;
     const filesPerSecond =
         elapsedSeconds > 0
@@ -47,7 +48,7 @@ export function ScanStats({ progress }: ScanStatsProps) {
         {
             icon: <HardDrive size={18} />,
             label: "Data Seen",
-            value: formatBytes(progress.bytes_scanned),
+            value: fmt(progress.bytes_scanned),
             color: "hsl(150, 65%, 48%)",
         },
         {

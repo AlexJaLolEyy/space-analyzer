@@ -1,6 +1,8 @@
-export type SizeUnitMode = "binary" | "decimal";
+import { useCallback } from "react";
+import { useSettingsStore } from "../stores/settingsStore";
 
-export function formatBytes(bytes: number, decimals = 2, unit: SizeUnitMode = "binary"): string {
+export type SizeUnitMode = "binary" | "decimal";
+export function formatBytes(bytes: number, decimals = 2, unit: SizeUnitMode = useSettingsStore.getState().sizeUnit): string {
     if (!+bytes) return "0 B";
 
     const k = unit === "binary" ? 1024 : 1000;
@@ -13,7 +15,17 @@ export function formatBytes(bytes: number, decimals = 2, unit: SizeUnitMode = "b
     return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
 }
 
-/** Format a number of bytes for display, reading the setting from the store if in React context. */
+/** Size formatter bound to the `sizeUnit` setting; re-renders the caller when it changes. */
+export function useFormatBytes(): (bytes: number, decimals?: number) => string {
+    const unit = useSettingsStore((s) => s.sizeUnit);
+    return useCallback((bytes: number, decimals = 2) => formatBytes(bytes, decimals, unit), [unit]);
+}
+
+/** Signed size change, e.g. "+12.3 GiB" or "−4 GiB". */
+export function formatDelta(delta: number, fmt: (b: number, d?: number) => string = formatBytes): string {
+    return `${delta < 0 ? "−" : "+"}${fmt(Math.abs(delta), 1)}`;
+}
+
 export function formatRelativeDate(timestamp: number | null): string {
     if (!timestamp) return "Unknown";
     const now = Date.now();

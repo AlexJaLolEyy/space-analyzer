@@ -1,8 +1,10 @@
-import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, Shield, ShieldAlert, Trash2, Video } from "lucide-react";
+import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, RefreshCw, Shield, ShieldAlert, Trash2, Video } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
-import { formatBytes } from "../../lib/format";
+import { formatDelta, useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
+import { rescanPath } from "../../lib/refresh";
 import { useToastStore } from "../../stores/toastStore";
 import type { FileCategory, ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
@@ -45,7 +47,10 @@ const getExtBadge = (name: string): string | null => {
 
 export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, rowRef }: ListItemProps) {
     const isDir = node.is_dir;
-    const percentage = parentSize > 0 ? (node.size / parentSize) * 100 : 0;
+    const fmt = useFormatBytes();
+    const mode = useSizeMode();
+    const shownSize = nodeSize(node, mode);
+    const percentage = parentSize > 0 ? (shownSize / parentSize) * 100 : 0;
     const color = getCategoryColor(node.category);
     const extBadge = !isDir ? getExtBadge(node.name) : null;
 
@@ -57,7 +62,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const isBlockedDelete = isSynthetic || isProtected;
 
     const MENU_W = 168;
-    const MENU_H = 140;
+    const MENU_H = 180;
     const handleContextMenu = (e: React.MouseEvent) => {
         e.preventDefault();
         const x = Math.min(e.clientX, window.innerWidth - MENU_W - 4);
@@ -158,8 +163,17 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                     </span>
 
                     <span className="text-sm font-mono font-medium whitespace-nowrap tabular-nums">
-                        {formatBytes(node.size)}
+                        {fmt(shownSize)}
                     </span>
+
+                    {node.delta !== undefined && Math.abs(node.delta) >= 1048576 && (
+                        <span
+                            title={"Change since the previous scan"}
+                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded tabular-nums whitespace-nowrap ${node.delta > 0 ? "bg-amber-500/15 text-amber-500" : "bg-emerald-500/15 text-emerald-500"}`}
+                        >
+                            {formatDelta(node.delta, fmt)}
+                        </span>
+                    )}
 
                     <span className="text-xs text-muted-foreground tabular-nums w-24 text-right">
                         {node.last_modified ? new Date(node.last_modified * 1000).toLocaleDateString() : "—"}
@@ -216,7 +230,17 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                         >
                             <FileKey size={14} /> Copy Path
                         </button>
-                        <div className="h-px bg-border my-1" />
+                        <button
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors disabled:opacity-40"
+                            disabled={isSynthetic}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleCloseMenu();
+                                void rescanPath(node.path);
+                            }}
+                        >
+                            <RefreshCw size={14} /> {node.is_dir ? "Rescan folder" : "Rescan parent folder"}
+                        </button>                        <div className="h-px bg-border my-1" />
                         <button
                             type="button"
                             disabled={isBlockedDelete}
@@ -240,7 +264,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
             <ConfirmModal
                 isOpen={deleteConfig.open}
                 title={deleteConfig.mode === "permanent" ? "Delete Permanently?" : "Move to Recycle Bin?"}
-                message={`Are you sure you want to ${deleteConfig.mode === "permanent" ? "permanently delete" : "move"} "${node.name}" (${formatBytes(node.size)}) ${deleteConfig.mode === "permanent" ? "from disk" : "to the Recycle Bin"}? You can undo for a few seconds after confirming.`}
+                message={`Are you sure you want to ${deleteConfig.mode === "permanent" ? "permanently delete" : "move"} "${node.name}" (${fmt(node.size)}) ${deleteConfig.mode === "permanent" ? "from disk" : "to the Recycle Bin"}? You can undo for a few seconds after confirming.`}
                 confirmLabel={deleteConfig.mode === "permanent" ? "Delete" : "Move to Bin"}
                 variant={deleteConfig.mode === "permanent" ? "danger" : "warning"}
                 isLoading={false}

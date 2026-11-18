@@ -1,7 +1,8 @@
 import { useMemo } from "react";
 import { Bar, BarChart, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getCategoryColor, getDirColor } from "../../lib/colors";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
 
@@ -10,13 +11,15 @@ interface BarChartViewProps {
 }
 
 export function BarChartView({ node }: BarChartViewProps) {
+    const fmt = useFormatBytes();
+    const mode = useSizeMode();
     const currentPath = useScanStore((s) => s.currentPath);
     const setCurrentPath = useScanStore((s) => s.setCurrentPath);
 
     const data = useMemo(() => {
-        const sorted = [...node.children].sort((a, b) => b.size - a.size);
+        const sorted = node.children.map((c) => ({ ...c, value: nodeSize(c, mode) })).sort((a, b) => b.value - a.value);
         return sorted.slice(0, 20);
-    }, [node.children]);
+    }, [node.children, mode]);
 
     const getColor = (entry: ScanNode, index: number) => {
         if (entry.is_dir) return getDirColor(index);
@@ -38,7 +41,7 @@ export function BarChartView({ node }: BarChartViewProps) {
             return (
                 <div className="glass p-3 rounded-xl border-border/50 text-sm max-w-50 shadow-lg">
                     <p className="font-semibold truncate" title={d.name}>{d.name}</p>
-                    <p className="text-muted-foreground">{formatBytes(d.size)}</p>
+                    <p className="text-muted-foreground">{fmt(d.value)}</p>
                     {d.file_count > 0 && (
                         <p className="text-xs text-muted-foreground mt-1">{d.file_count.toLocaleString()} items</p>
                     )}
@@ -71,7 +74,7 @@ export function BarChartView({ node }: BarChartViewProps) {
                         tick={{ fontSize: 12, fill: "var(--color-muted-foreground)" }}
                     />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: "var(--color-muted)", opacity: 0.3 }} />
-                    <Bar dataKey="size" radius={[0, 6, 6, 0]} className="cursor-pointer">
+                    <Bar dataKey="value" radius={[0, 6, 6, 0]} className="cursor-pointer">
                         {data.map((entry, index) => (
                             <Cell
                                 key={`cell-${index}`}

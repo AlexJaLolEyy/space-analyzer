@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search, CircleDashed } from "lucide-react";
+import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, RefreshCw, Search } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { rescanPath } from "../../lib/refresh";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
+import { useSettingsStore } from "../../stores/settingsStore";
 import type { ScanNode, SearchHit } from "../../types/scan";
 import { ViewChartErrorBoundary } from "../ui/ViewChartErrorBoundary";
 import { ListView } from "./ListView";
@@ -10,14 +12,12 @@ import { ListView } from "./ListView";
 const PieChartView = lazy(() => import("./PieChartView").then((m) => ({ default: m.PieChartView })));
 const BarChartView = lazy(() => import("./BarChartView").then((m) => ({ default: m.BarChartView })));
 const TreemapView = lazy(() => import("./TreemapView").then((m) => ({ default: m.TreemapView })));
-import { SunburstView } from "./SunburstView";
 
 const VIEW_BUTTONS = [
     { id: "list" as const, label: "List", icon: <LayoutList size={15} /> },
     { id: "pie" as const, label: "Pie", icon: <PieChart size={15} /> },
     { id: "bar" as const, label: "Bar", icon: <BarChartHorizontal size={15} /> },
     { id: "treemap" as const, label: "Map", icon: <Grid2X2 size={15} /> },
-    { id: "sunburst" as const, label: "Sunburst", icon: <CircleDashed size={15} /> },
 ];
 
 function hitToScanNode(h: SearchHit): ScanNode {
@@ -25,6 +25,7 @@ function hitToScanNode(h: SearchHit): ScanNode {
         name: h.name,
         path: h.path,
         size: h.size,
+        alloc: h.alloc,
         is_dir: h.is_dir,
         children: [],
         file_count: h.file_count,
@@ -46,6 +47,7 @@ export function ViewContainer() {
     const categoryFilter = useScanStore((s) => s.categoryFilter);
     const setCategoryFilter = useScanStore((s) => s.setCategoryFilter);
     const setCurrentPath = useScanStore((s) => s.setCurrentPath);
+    const sizeMode = useSettingsStore((s) => s.sizeMode);
 
     const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
     const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -71,6 +73,7 @@ export function ViewContainer() {
                     const hits = await invoke<SearchHit[]>("search_nodes", {
                         query: trimmedQuery,
                         maxResults: 500,
+                        onDisk: useSettingsStore.getState().sizeMode === "disk",
                     });
                     if (seq === searchSeq.current) setSearchHits(hits);
                 } catch (e) {
@@ -82,7 +85,7 @@ export function ViewContainer() {
         return () => {
             if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
         };
-    }, [trimmedQuery, scanTree]);
+    }, [trimmedQuery, scanTree, sizeMode]);
 
     useEffect(() => {
         if (!scanTree || !currentNode?.is_dir) return;
@@ -203,6 +206,14 @@ export function ViewContainer() {
                     })}
                 </div>
 
+                <button
+                    onClick={() => void rescanPath(currentNode.path)}
+                    title="Rescan this folder from disk"
+                    className="p-1.5 rounded-lg bg-secondary/60 border border-border/60 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                >
+                    <RefreshCw size={13} />
+                </button>
+
                 <select
                     value={categoryFilter}
                     onChange={(e) => setCategoryFilter(e.target.value as any)}
@@ -227,7 +238,7 @@ export function ViewContainer() {
                     <Search size={13} className="text-muted-foreground shrink-0" />
                     <input
                         type="text"
-                        placeholder="Search tree… (Ctrl+F)"
+                        placeholder="Search…  ext:mp4  >500MB  older:1y  *.log  (Ctrl+F)"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         className="bg-transparent border-none outline-none text-xs w-full placeholder:text-muted-foreground"
@@ -258,11 +269,6 @@ export function ViewContainer() {
                     {viewMode === "treemap" && (
                         <ViewChartErrorBoundary label="Treemap"><Suspense fallback={null}>
                             <TreemapView node={chartNode} /></Suspense>
-                        </ViewChartErrorBoundary>
-                    )}
-                    {viewMode === "sunburst" && (
-                        <ViewChartErrorBoundary label="Sunburst">
-                            <SunburstView node={chartNode} />
                         </ViewChartErrorBoundary>
                     )}
                 </motion.div>

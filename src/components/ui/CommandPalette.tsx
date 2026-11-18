@@ -4,12 +4,10 @@ import { useTheme } from "../theme/ThemeProvider";
 import { useScanStore } from "../../stores/scanStore";
 import {
     BarChart3,
-    CircleDashed,
     Copy,
     Download,
     FolderSearch,
     Grid2X2,
-    History,
     Keyboard,
     List,
     PieChart,
@@ -30,7 +28,6 @@ export interface CommandPaletteProps {
     onFocusSearch: () => void;
     onOpenCustomPath: () => void;
     onNewScan: () => void;
-    onOpenHistory: () => void;
     duplicatesOpen: boolean;
     dashboardVisible: boolean;
 }
@@ -44,7 +41,6 @@ export function CommandPalette({
     onFocusSearch,
     onOpenCustomPath,
     onNewScan,
-    onOpenHistory,
     duplicatesOpen,
     dashboardVisible,
 }: CommandPaletteProps) {
@@ -132,13 +128,6 @@ export function CommandPalette({
                         </Command.Item>
                         <Command.Item
                             disabled={!scanTree || dashboardVisible}
-                            onSelect={() => run(() => setViewMode("sunburst"))}
-                            className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer aria-selected:bg-muted data-[disabled=true]:opacity-40"
-                        >
-                            <CircleDashed size={14} /> Sunburst {viewMode === "sunburst" && "· current"}
-                        </Command.Item>
-                        <Command.Item
-                            disabled={!scanTree || dashboardVisible}
                             onSelect={() => run(() => setViewMode("pie"))}
                             className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer aria-selected:bg-muted data-[disabled=true]:opacity-40"
                         >
@@ -184,12 +173,6 @@ export function CommandPalette({
                             className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer aria-selected:bg-muted data-[disabled=true]:opacity-40"
                         >
                             <Copy size={14} /> {duplicatesOpen ? "Close duplicates" : "Find duplicates"}
-                        </Command.Item>
-                        <Command.Item
-                            onSelect={() => run(onOpenHistory)}
-                            className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm cursor-pointer aria-selected:bg-muted"
-                        >
-                            <History size={14} /> Scan history
                         </Command.Item>
                         <Command.Item
                             disabled={!scanTree}

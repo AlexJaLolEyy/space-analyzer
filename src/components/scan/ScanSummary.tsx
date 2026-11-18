@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Clock, Files, FolderOpen, HardDrive } from "lucide-react";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
 import type { ScanNode } from "../../types/scan";
 
 interface ScanSummaryProps {
@@ -8,11 +8,12 @@ interface ScanSummaryProps {
 }
 
 export function ScanSummary({ tree }: ScanSummaryProps) {
+    const fmt = useFormatBytes();
     const stats = [
         {
             icon: <HardDrive size={18} />,
             label: "Total Size",
-            value: formatBytes(tree.size),
+            value: fmt(tree.size),
             color: "hsl(220, 80%, 60%)",
         },
         {

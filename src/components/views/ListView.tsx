@@ -1,7 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
-import { formatBytes } from "../../lib/format";
+import { useFormatBytes } from "../../lib/format";
+import { nodeSize, useSizeMode } from "../../lib/nodeSize";
 import { useScanStore } from "../../stores/scanStore";
 import type { ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
@@ -14,6 +15,8 @@ interface ListViewProps {
 }
 
 export function ListView({ node, searchMode = false }: ListViewProps) {
+    const fmt = useFormatBytes();
+    const mode = useSizeMode();
     const sortBy = useScanStore((s) => s.sortBy);
     const sortOrder = useScanStore((s) => s.sortOrder);
     const setSort = useScanStore((s) => s.setSort);
@@ -32,7 +35,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
         sorted.sort((a, b) => {
             let comparison = 0;
             if (sortBy === "size") {
-                comparison = a.size - b.size;
+                comparison = nodeSize(a, mode) - nodeSize(b, mode);
             } else if (sortBy === "name") {
                 comparison = a.name.localeCompare(b.name);
             } else if (sortBy === "count") {
@@ -43,7 +46,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
             return sortOrder === "asc" ? comparison : -comparison;
         });
         return sorted;
-    }, [node.children, sortBy, sortOrder]);
+    }, [node.children, sortBy, sortOrder, mode]);
 
     const orderedPaths = useMemo(() => sortedChildren.map((c) => c.path), [sortedChildren]);
 
@@ -159,7 +162,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
                     </button>
                     <button
                         onClick={() => handleSortToggle("modified")}
-                        className="hover:text-foreground transition-colors flex items-center group"
+                        className="hover:text-foreground transition-colors flex items-center justify-end group w-24"
                     >
                         Modified {getSortIcon("modified")}
                     </button>
@@ -192,7 +195,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
                                 >
                                     <ListItem
                                         node={child}
-                                        parentSize={node.size}
+                                        parentSize={nodeSize(node, mode)}
                                         onActivate={(n, ev) => handleActivate(vr.index, n, ev)}
                                         isSelected={selectedSet.has(child.path)}
                                         isFocused={focusedIndex === vr.index}
@@ -216,7 +219,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
                 title="Move to Recycle Bin?"
                 message={
                     keyDeleteTarget
-                        ? `Move "${keyDeleteTarget.name}" (${formatBytes(keyDeleteTarget.size)}) to the Recycle Bin? You can undo for a few seconds after confirming.`
+                        ? `Move "${keyDeleteTarget.name}" (${fmt(keyDeleteTarget.size)}) to the Recycle Bin? You can undo for a few seconds after confirming.`
                         : ""
                 }
                 confirmLabel="Move to Bin"
