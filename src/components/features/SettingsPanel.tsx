@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Settings, X, Palette, HardDrive, FolderX, Info, Ruler, Plus, Trash2 } from "lucide-react";
+import { Settings, X, Palette, HardDrive, FolderX, Info, CalendarClock, Ruler, Plus, Trash2 } from "lucide-react";
 import { useSettingsStore, type AccentColor } from "../../stores/settingsStore";
+import { ScheduleSection } from "./ScheduleSection";
 
 interface SettingsPanelProps {
     onClose: () => void;
@@ -19,6 +20,7 @@ const SECTION_TABS = [
     { id: "general", label: "General", icon: Settings },
     { id: "appearance", label: "Appearance", icon: Palette },
     { id: "exclusions", label: "Exclusions", icon: FolderX },
+    { id: "schedule", label: "Schedule", icon: CalendarClock },
     { id: "about", label: "About", icon: Info },
 ];
 
@@ -31,7 +33,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         skipElevationPrompt, setSkipElevationPrompt,
     } = useSettingsStore();
 
-    const [activeTab, setActiveTab] = useState<"general" | "appearance" | "exclusions" | "about">("appearance");
+    const [activeTab, setActiveTab] = useState<"general" | "appearance" | "exclusions" | "schedule" | "about">("appearance");
     const [newPath, setNewPath] = useState("");
 
     const handleAddPath = () => {
@@ -224,6 +226,9 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                 </div>
                             </div>
                         )}
+
+                        {/* ── Schedule ── */}
+                        {activeTab === "schedule" && <ScheduleSection />}
 
                         {/* ── About ── */}
                         {activeTab === "about" && (
