@@ -18,7 +18,7 @@ import { ConfirmModal } from "./components/ui/ConfirmModal";
 import { SelectionActionBar } from "./components/ui/SelectionActionBar";
 import { ViewContainer } from "./components/views/ViewContainer";
 import { useScan } from "./hooks/useScan";
-import { refreshRootAndCurrent } from "./lib/refresh";
+import { refreshChanged, refreshRootAndCurrent } from "./lib/refresh";
 import { useScanStore } from "./stores/scanStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useToastStore } from "./stores/toastStore";
@@ -74,6 +74,30 @@ export function MainWorkspace() {
         };
     }, [setIsElevated, setShowElevationDialog]);
 
+    // live watcher: tell the backend to watch the scanned folder and show a banner on changes
+    const liveUpdates = useSettingsStore((s) => s.liveUpdates);
+    const changedOnDisk = useUiStore((s) => s.changedOnDisk);
+    const setChangedOnDisk = useUiStore((s) => s.setChangedOnDisk);
+    const watchRoot = scanTree?.path;
+    useEffect(() => {
+        if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+        setChangedOnDisk(null);
+        if (!watchRoot || isScanning) return;
+        invoke("set_live_watch", { enabled: liveUpdates }).catch(() => {});
+        return () => {
+            invoke("set_live_watch", { enabled: false }).catch(() => {});
+        };
+    }, [watchRoot, liveUpdates, isScanning, setChangedOnDisk]);
+    useEffect(() => {
+        if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+        let unlisten: (() => void) | undefined;
+        listen<{ count: number; dirs: string[] }>("tree-changed", (e) => setChangedOnDisk(e.payload))
+            .then((u) => {
+                unlisten = u;
+            })
+            .catch(() => {});
+        return () => unlisten?.();
+    }, [setChangedOnDisk]);
     // background deltas finished: refresh badges and the dashboard card
     useEffect(() => {
         if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
@@ -438,6 +462,27 @@ export function MainWorkspace() {
                             </div>
                         </div>
 
+                        {changedOnDisk && (
+                            <div className="flex items-center justify-between gap-3 px-5 py-2 text-sm bg-amber-500/10 border-b border-amber-500/30 shrink-0">
+                                <span>
+                                    {changedOnDisk.count.toLocaleString()} {changedOnDisk.count === 1 ? "change" : "changes"} on disk since the scan.
+                                </span>
+                                <span className="flex gap-2">
+                                    <button
+                                        onClick={() => void refreshChanged(changedOnDisk.dirs)}
+                                        className="px-3 py-1 rounded-md bg-primary text-primary-foreground text-xs font-semibold hover:bg-primary/90"
+                                    >
+                                        Refresh
+                                    </button>
+                                    <button
+                                        onClick={() => setChangedOnDisk(null)}
+                                        className="px-3 py-1 rounded-md bg-secondary hover:bg-muted text-xs font-semibold"
+                                    >
+                                        Dismiss
+                                    </button>
+                                </span>
+                            </div>
+                        )}
                         {showDashboard ? (
                             <BentoDashboard onExplore={() => setShowDashboard(false)} />
                         ) : (

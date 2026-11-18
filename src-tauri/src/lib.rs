@@ -9,6 +9,7 @@ pub mod scan_stream;
 pub mod search;
 pub mod snapshot;
 pub mod utils;
+pub mod watcher;
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -66,6 +67,7 @@ pub fn run() {
             is_elevated: crate::utils::is_admin(),
         }))
         .manage(commands::shell::LaunchPath(Mutex::new(launch_path)))
+        .manage(watcher::WatchState::default())
         .manage(scan_session::ScanSession::new())
         .invoke_handler(tauri::generate_handler![
             commands::drives::list_drives,
@@ -87,6 +89,7 @@ pub fn run() {
             commands::scanner::cancel_scan,
             commands::scanner::rescan_subtree,
             commands::scanner::quick_refresh,
+            commands::scanner::set_live_watch,
             commands::schedule::get_schedule,
             commands::schedule::set_schedule,
             commands::schedule::remove_schedule,

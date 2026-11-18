@@ -33,6 +33,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         defaultViewMode, setDefaultViewMode,
         excludedPaths, addExcludedPath, removeExcludedPath,
         skipElevationPrompt, setSkipElevationPrompt,
+        liveUpdates, setLiveUpdates,
     } = useSettingsStore();
 
     const [activeTab, setActiveTab] = useState<"general" | "appearance" | "exclusions" | "schedule" | "about">("appearance");
@@ -200,6 +201,19 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                     </label>
                                 </div>
 
+                                <div>
+                                    <label className="block text-sm font-semibold mb-1">Live updates</label>
+                                    <p className="text-xs text-muted-foreground mb-3">Watch the scanned folder and offer a refresh when files change on disk.</p>
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            className="accent-primary"
+                                            checked={liveUpdates}
+                                            onChange={(e) => setLiveUpdates(e.target.checked)}
+                                        />
+                                        Notify me about changes on disk
+                                    </label>
+                                </div>
                                 <div>
                                     <label className="block text-sm font-semibold mb-1">Explorer integration</label>
                                     <p className="text-xs text-muted-foreground mb-3">Add "Analyze with Space Analyzer" to the right-click menu of folders and drives (current user only).</p>

@@ -210,6 +210,25 @@ fn spawn_deltas(app: AppHandle, session: ScanSession) {
     });
 }
 
+/// Starts or stops watching the scanned folder for changes (`tree-changed` events).
+#[command]
+pub fn set_live_watch(
+    app: AppHandle,
+    session: State<'_, ScanSession>,
+    watch: State<'_, crate::watcher::WatchState>,
+    enabled: bool,
+) -> Result<(), AppError> {
+    let mut slot = watch.0.lock().unwrap_or_else(|e| e.into_inner());
+    *slot = None; // dropping the old watcher stops it
+    if !enabled {
+        return Ok(());
+    }
+    let root = session.with_arena(|a| Ok(a.root_path().to_string()))?;
+    let w = crate::watcher::start(app, session.inner().clone(), &root).map_err(|e| AppError::Internal { message: e })?;
+    *slot = Some(w);
+    Ok(())
+}
+
 #[command]
 pub fn cancel_scan(state: State<'_, Mutex<ScanState>>) {
     let state_lock = state.lock().unwrap_or_else(|e| e.into_inner());

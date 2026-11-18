@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { findNodeByPath, useScanStore } from "../stores/scanStore";
 import { useToastStore } from "../stores/toastStore";
+import { useUiStore } from "../stores/uiStore";
 import type { ScanNode } from "../types/scan";
 
 /** Refetches a folder's own totals and its children from the backend arena. */
@@ -109,4 +110,17 @@ export async function smartRefresh(path: string): Promise<void> {
         }
     }
     await rescanPath(path);
+}
+
+/** Applies what the live watcher reported: journal refresh for Turbo scans, else rescan those folders. */
+export async function refreshChanged(dirs: string[]): Promise<void> {
+    const s = useScanStore.getState();
+    const root = s.scanTree?.path;
+    if (!root) return;
+    if (s.scanInfo?.engine === "Turbo" || dirs.length === 0) {
+        await smartRefresh(root);
+    } else {
+        for (const d of dirs) await rescanPath(d);
+    }
+    useUiStore.getState().setChangedOnDisk(null);
 }
