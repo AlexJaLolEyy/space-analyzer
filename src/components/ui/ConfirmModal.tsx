@@ -11,6 +11,7 @@ interface ConfirmModalProps {
     onConfirm: () => void;
     onCancel: () => void;
     isLoading?: boolean;
+    checkbox?: { label: string; checked: boolean; onChange: (v: boolean) => void };
 }
 
 export function ConfirmModal({
@@ -23,6 +24,7 @@ export function ConfirmModal({
     onConfirm,
     onCancel,
     isLoading = false,
+    checkbox,
 }: ConfirmModalProps) {
     if (!isOpen) return null;
 
@@ -57,6 +59,17 @@ export function ConfirmModal({
                     <div className="flex-1">
                         <h2 className="text-lg font-bold">{title}</h2>
                         <p className="text-sm text-muted-foreground mt-2">{message}</p>
+                        {checkbox && (
+                            <label className="flex items-center gap-2 mt-4 text-sm cursor-pointer select-none">
+                                <input
+                                    type="checkbox"
+                                    checked={checkbox.checked}
+                                    onChange={(e) => checkbox.onChange(e.target.checked)}
+                                    className="accent-primary"
+                                />
+                                {checkbox.label}
+                            </label>
+                        )}
                     </div>
                 </div>
 

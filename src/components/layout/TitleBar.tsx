@@ -1,16 +1,20 @@
 import { Window } from "@tauri-apps/api/window";
 import { AnimatePresence } from "framer-motion";
-import { Copy, Minus, Settings, Square, X } from "lucide-react";
+import { Copy, Minus, Settings, Square, X, Zap } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ThemeToggle } from "../theme/ThemeToggle";
 import { Breadcrumbs } from "./Breadcrumbs";
 import { SettingsPanel } from "../features/SettingsPanel";
+import { useUiStore } from "../../stores/uiStore";
 
 const appWindow = new Window("main");
 
 export function TitleBar() {
     const [isMaximized, setIsMaximized] = useState(false);
-    const [showSettings, setShowSettings] = useState(false);
+    const showSettings = useUiStore((s) => s.showSettings);
+    const setShowSettings = useUiStore((s) => s.setShowSettings);
+    const isElevated = useUiStore((s) => s.isElevated);
+    const setShowElevationDialog = useUiStore((s) => s.setShowElevationDialog);
 
     const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -51,12 +55,22 @@ export function TitleBar() {
                         SpaceAnalyzer
                     </span>
                     <Breadcrumbs />
+                    {isElevated !== null && (
+                        <button
+                            type="button"
+                            onClick={() => !isElevated && setShowElevationDialog(true)}
+                            title={isElevated ? "Turbo mode: fast MFT scans on NTFS drives" : "Standard mode. Click to enable Turbo (admin)."}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-colors ${isElevated ? "bg-emerald-500/15 text-emerald-500 cursor-default" : "bg-secondary text-muted-foreground hover:text-foreground cursor-pointer"}`}
+                        >
+                            <Zap className="w-3 h-3" /> {isElevated ? "Turbo" : "Standard"}
+                        </button>
+                    )}
                 </div>
 
                 <div className="flex h-full items-center">
                     <ThemeToggle />
                     <button
-                        onClick={() => setShowSettings(v => !v)}
+                        onClick={() => setShowSettings(!showSettings)}
                         title="Settings (⌘,)"
                         className={`flex items-center justify-center w-10 h-full hover:bg-muted transition-colors ${showSettings ? "text-primary" : "text-muted-foreground hover:text-foreground"}`}
                     >

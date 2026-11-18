@@ -111,6 +111,11 @@ export function ScanProgress({ progress, path, onCancel }: ScanProgressProps) {
                         <h2 className={`text-2xl font-bold tracking-tight ${getPhaseColor()} text-center`}>
                             {phaseText}
                         </h2>
+                        {progress?.engine && (
+                            <span className="mt-2 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-secondary text-muted-foreground">
+                                {progress.engine}
+                            </span>
+                        )}
                         <p className="text-sm font-medium text-muted-foreground mt-1 text-center">
                             Scanning <span className="text-foreground">{rootName}</span>
                         </p>

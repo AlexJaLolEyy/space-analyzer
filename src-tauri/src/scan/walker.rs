@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateFileW, GetFileInformationByHandleEx, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY,
+    CreateFileW, GetDiskFreeSpaceExW, GetFileInformationByHandleEx, FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY,
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
 };
 
@@ -57,6 +57,22 @@ fn to_wide_extended(path: &str) -> Vec<u16> {
         format!(r"\\?\{}", path)
     };
     ext.encode_utf16().collect()
+}
+
+/// `total - free` of a drive root (0 if unknown).
+fn drive_used_bytes(root: &str) -> u64 {
+    let mut wide: Vec<u16> = root.encode_utf16().collect();
+    if wide.last() != Some(&(b'\\' as u16)) {
+        wide.push(b'\\' as u16);
+    }
+    wide.push(0);
+    let (mut total, mut free) = (0u64, 0u64);
+    let ok = unsafe { GetDiskFreeSpaceExW(wide.as_ptr(), std::ptr::null_mut(), &mut total, &mut free) };
+    if ok == 0 {
+        0
+    } else {
+        total.saturating_sub(free)
+    }
 }
 
 fn rd_u32(b: &[u8], o: usize) -> u32 {
@@ -239,15 +255,27 @@ pub fn scan(
 
     let done = AtomicBool::new(false);
     let root_wide = to_wide_extended(&root_path);
+    let used_bytes = if root_path.len() <= 3 && super::is_drive_path(&root_path) {
+        drive_used_bytes(&root_path)
+    } else {
+        0
+    };
 
     std::thread::scope(|s| {
         s.spawn(|| {
             while !done.load(Ordering::Relaxed) {
+                let bytes = ctx.bytes.load(Ordering::Relaxed);
+                let percent = if used_bytes > 0 {
+                    (bytes as f64 / used_bytes as f64 * 100.0).min(99.0) as f32
+                } else {
+                    0.0
+                };
                 progress(Progress {
                     phase: "Scanning folders",
+                    engine: "Standard",
                     files: ctx.files.load(Ordering::Relaxed),
-                    bytes: ctx.bytes.load(Ordering::Relaxed),
-                    percent: 0.0,
+                    bytes,
+                    percent,
                     elapsed_ms: start.elapsed().as_millis() as u64,
                 });
                 std::thread::sleep(Duration::from_millis(150));

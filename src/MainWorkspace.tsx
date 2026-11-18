@@ -23,6 +23,7 @@ import { useScan } from "./hooks/useScan";
 import { useScanStore } from "./stores/scanStore";
 import { useSettingsStore } from "./stores/settingsStore";
 import { useToastStore } from "./stores/toastStore";
+import { useUiStore } from "./stores/uiStore";
 import type { DriveInfo } from "./types/drive";
 import type { ScanDiff } from "./types/history";
 import type { ScanNode } from "./types/scan";
@@ -33,8 +34,11 @@ export function MainWorkspace() {
     const reset = useScanStore((s) => s.reset);
     const currentPath = useScanStore((s) => s.currentPath);
     const setSkipElevationPrompt = useSettingsStore((s) => s.setSkipElevationPrompt);
-    const [isElevated, setIsElevated] = useState<boolean | null>(null);
-    const [showElevationDialog, setShowElevationDialog] = useState(false);
+    const [dontAskAgain, setDontAskAgain] = useState(false);
+    const showElevationDialog = useUiStore((s) => s.showElevationDialog);
+    const setShowElevationDialog = useUiStore((s) => s.setShowElevationDialog);
+    const isElevated = useUiStore((s) => s.isElevated);
+    const setIsElevated = useUiStore((s) => s.setIsElevated);
     const [elevateLoading, setElevateLoading] = useState(false);
     const [targetPath, setTargetPath] = useState<string | null>(null);
     const [pathInput, setPathInput] = useState("");
@@ -111,14 +115,18 @@ export function MainWorkspace() {
         startScan(path);
     };
 
-    const handleCustomPath = (e: React.FormEvent) => {
-        e.preventDefault();
-        const trimmed = pathInput.trim();
+    const scanCustomPath = (path: string) => {
+        const trimmed = path.trim();
         if (!trimmed) return;
         setTargetPath(trimmed);
         setShowPathInput(false);
         setShowDashboard(true);
         startScan(trimmed);
+    };
+
+    const handleCustomPath = (e: React.FormEvent) => {
+        e.preventDefault();
+        scanCustomPath(pathInput);
     };
 
     const handleBrowse = async () => {
@@ -431,7 +439,7 @@ export function MainWorkspace() {
                 ) : compareData ? (
                     <ScanCompareView key="compare" diff={compareData} onClose={() => setCompareData(null)} />
                 ) : (
-                    <DriveSelector key="drive" onDriveSelected={handleDriveClick} onOpenHistory={() => setShowHistory(true)} />
+                    <DriveSelector key="drive" onDriveSelected={handleDriveClick} onBrowse={handleBrowse} onCustomPath={scanCustomPath} onOpenHistory={() => setShowHistory(true)} />
                 )}
             </AnimatePresence>
 
@@ -456,6 +464,7 @@ export function MainWorkspace() {
                 cancelLabel="Continue Standard"
                 variant="info"
                 isLoading={elevateLoading}
+                checkbox={{ label: "Don't ask again", checked: dontAskAgain, onChange: setDontAskAgain }}
                 onConfirm={async () => {
                     try {
                         setElevateLoading(true);
@@ -468,8 +477,7 @@ export function MainWorkspace() {
                     }
                 }}
                 onCancel={() => {
-                    // Remember the choice; "Enable Turbo" stays available in the results header.
-                    setSkipElevationPrompt(true);
+                    if (dontAskAgain) setSkipElevationPrompt(true);
                     setShowElevationDialog(false);
                 }}
             />

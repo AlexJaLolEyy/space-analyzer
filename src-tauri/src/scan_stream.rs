@@ -9,5 +9,6 @@ pub enum ScanStreamMsg {
         current_path: String,
         percent: f32,
         elapsed_ms: u64,
+        engine: String,
     },
 }

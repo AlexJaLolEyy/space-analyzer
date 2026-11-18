@@ -30,6 +30,7 @@ export interface ScanProgress {
     current_path: string;
     percent: number;
     elapsed_ms: number;
+    engine: string;
 }
 
 export type ScanStreamMsg = {
@@ -39,6 +40,7 @@ export type ScanStreamMsg = {
     current_path: string;
     percent: number;
     elapsed_ms: number;
+    engine: string;
 };
 
 export interface SearchHit {

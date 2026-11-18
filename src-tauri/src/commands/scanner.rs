@@ -63,6 +63,7 @@ pub async fn start_scan(
                 current_path: p.phase.to_string(),
                 percent: p.percent,
                 elapsed_ms: p.elapsed_ms,
+                engine: p.engine.to_string(),
             });
         };
         scan_path(&scan_path_str, None, &cancel_flag, &progress)

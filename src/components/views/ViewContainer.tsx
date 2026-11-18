@@ -216,7 +216,7 @@ export function ViewContainer() {
                     <option value="System">System</option>
                     <option value="Database">Databases</option>
                     <option value="Font">Fonts</option>
-                    <option value="Unknown">Others</option>
+                    <option value="Other">Others</option>
                 </select>
 
                 <div className="flex items-center gap-2 bg-secondary/60 px-3 py-1.5 rounded-lg border border-border/60 focus-within:ring-2 focus-within:ring-ring w-52 transition-shadow shrink-0">

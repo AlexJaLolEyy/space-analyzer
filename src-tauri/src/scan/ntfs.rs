@@ -530,6 +530,7 @@ pub fn scan(
                     last_emit = Instant::now();
                     progress(Progress {
                         phase: "Reading file table",
+                        engine: "Turbo",
                         files: cols_ref.files,
                         bytes: cols_ref.bytes,
                         percent: (done_records as f32 / total_records.max(1) as f32 * 100.0).min(100.0),

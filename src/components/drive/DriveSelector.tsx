@@ -1,5 +1,6 @@
 import { motion, Variants } from "framer-motion";
-import { History, HardDrive } from "lucide-react";
+import { FolderOpen, FolderSearch, History, HardDrive } from "lucide-react";
+import { useState } from "react";
 import { useDrives } from "../../hooks/useDrives";
 import type { DriveInfo } from "../../types/drive";
 import { DriveCard } from "./DriveCard";
@@ -7,6 +8,8 @@ import { DriveCard } from "./DriveCard";
 interface DriveSelectorProps {
     onDriveSelected: (drive: DriveInfo) => void;
     onOpenHistory?: () => void;
+    onBrowse?: () => void;
+    onCustomPath?: (path: string) => void;
 }
 
 const containerVariants: Variants = {
@@ -19,8 +22,10 @@ const cardVariants: Variants = {
     visible: { opacity: 1, y: 0, transition: { duration: 0.4, ease: "easeOut" } },
 };
 
-export function DriveSelector({ onDriveSelected, onOpenHistory }: DriveSelectorProps) {
+export function DriveSelector({ onDriveSelected, onOpenHistory, onBrowse, onCustomPath }: DriveSelectorProps) {
     const { drives, isLoading, error } = useDrives();
+    const [showPath, setShowPath] = useState(false);
+    const [pathValue, setPathValue] = useState("");
 
     if (isLoading) {
         return (
@@ -76,7 +81,42 @@ export function DriveSelector({ onDriveSelected, onOpenHistory }: DriveSelectorP
                     <p className="text-muted-foreground/80 text-sm max-w-md mx-auto">
                         Or drag a folder from Explorer onto this window to scan it.
                     </p>
-                </motion.div>
+                    {(onBrowse || onCustomPath) && (
+                        <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                            {onBrowse && (
+                                <button
+                                    onClick={onBrowse}
+                                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
+                                >
+                                    <FolderOpen size={14} /> Browse folder
+                                </button>
+                            )}
+                            {onCustomPath && (
+                                <button
+                                    onClick={() => setShowPath((v) => !v)}
+                                    className="flex items-center gap-1.5 px-4 py-2 text-sm bg-secondary hover:bg-muted rounded-lg transition-colors font-medium"
+                                >
+                                    <FolderSearch size={14} /> Enter path
+                                </button>
+                            )}
+                            {onCustomPath && showPath && (
+                                <form
+                                    onSubmit={(e) => {
+                                        e.preventDefault();
+                                        if (pathValue.trim()) onCustomPath(pathValue);
+                                    }}
+                                >
+                                    <input
+                                        autoFocus
+                                        value={pathValue}
+                                        onChange={(e) => setPathValue(e.target.value)}
+                                        placeholder="C:\Custom\Path"
+                                        className="w-64 text-sm px-3 py-2 rounded-lg bg-secondary border border-border focus:outline-none focus:ring-2 focus:ring-ring font-mono"
+                                    />
+                                </form>
+                            )}
+                        </div>
+                    )}                </motion.div>
 
                 {/* Drive grid */}
                 <motion.div

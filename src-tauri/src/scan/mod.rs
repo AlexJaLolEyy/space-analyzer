@@ -5,7 +5,7 @@ pub mod ntfs;
 pub mod walker;
 
 use crate::models::flat_scan::ScanArena;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -45,6 +45,7 @@ impl Engine {
 #[derive(Clone, Debug)]
 pub struct Progress {
     pub phase: &'static str,
+    pub engine: &'static str,
     pub files: u64,
     pub bytes: u64,
     pub percent: f32,
@@ -100,16 +101,25 @@ pub fn scan_path(
         }
     };
 
+    // remember the last counters so the "Building index" message doesn't reset them
+    let last_files = AtomicU64::new(0);
+    let last_bytes = AtomicU64::new(0);
+    let tracked = |p: Progress| {
+        last_files.store(p.files, Ordering::Relaxed);
+        last_bytes.store(p.bytes, Ordering::Relaxed);
+        progress(p);
+    };
+
     let (raw, used) = match engine {
-        Engine::Mft => match ntfs::scan(&path, cancel, progress, start) {
+        Engine::Mft => match ntfs::scan(&path, cancel, &tracked, start) {
             Ok(r) => (r, Engine::Mft),
             Err(e) if is_cancelled(cancel) => return Err(e),
             Err(e) => {
                 eprintln!("MFT scan failed ({e}); falling back to walker");
-                (walker::scan(&path, cancel, progress, start)?, Engine::Walker)
+                (walker::scan(&path, cancel, &tracked, start)?, Engine::Walker)
             }
         },
-        Engine::Walker => (walker::scan(&path, cancel, progress, start)?, Engine::Walker),
+        Engine::Walker => (walker::scan(&path, cancel, &tracked, start)?, Engine::Walker),
     };
 
     if is_cancelled(cancel) {
@@ -118,8 +128,9 @@ pub fn scan_path(
 
     progress(Progress {
         phase: "Building index",
-        files: 0,
-        bytes: 0,
+        engine: used.label(),
+        files: last_files.load(Ordering::Relaxed),
+        bytes: last_bytes.load(Ordering::Relaxed),
         percent: 100.0,
         elapsed_ms: start.elapsed().as_millis() as u64,
     });

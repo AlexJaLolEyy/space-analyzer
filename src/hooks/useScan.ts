@@ -31,6 +31,7 @@ export function useScan() {
                             current_path: msg.current_path,
                             percent: msg.percent,
                             elapsed_ms: Number(msg.elapsed_ms),
+                            engine: msg.engine,
                         });
                     }
                 };
