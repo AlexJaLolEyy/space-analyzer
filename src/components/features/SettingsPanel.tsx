@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { Settings, X, Palette, HardDrive, FolderX, Info, CalendarClock, Ruler, Plus, Trash2 } from "lucide-react";
 import { useSettingsStore, type AccentColor } from "../../stores/settingsStore";
+import { useToastStore } from "../../stores/toastStore";
 import { ScheduleSection } from "./ScheduleSection";
 
 interface SettingsPanelProps {
@@ -35,6 +37,18 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
     const [activeTab, setActiveTab] = useState<"general" | "appearance" | "exclusions" | "schedule" | "about">("appearance");
     const [newPath, setNewPath] = useState("");
+    const [explorerOn, setExplorerOn] = useState(false);
+    useEffect(() => {
+        invoke<boolean>("get_explorer_integration").then(setExplorerOn).catch(() => {});
+    }, []);
+    const toggleExplorer = async (on: boolean) => {
+        try {
+            await invoke("set_explorer_integration", { enabled: on });
+            setExplorerOn(on);
+        } catch (e) {
+            useToastStore.getState().addToast("error", String(e));
+        }
+    };
 
     const handleAddPath = () => {
         const trimmed = newPath.trim();
@@ -184,7 +198,22 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
                                         />
                                         Ask to enable Turbo on start
                                     </label>
-                                </div>                            </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold mb-1">Explorer integration</label>
+                                    <p className="text-xs text-muted-foreground mb-3">Add "Analyze with Space Analyzer" to the right-click menu of folders and drives (current user only).</p>
+                                    <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                                        <input
+                                            type="checkbox"
+                                            className="accent-primary"
+                                            checked={explorerOn}
+                                            onChange={(e) => toggleExplorer(e.target.checked)}
+                                        />
+                                        Show in Explorer context menu
+                                    </label>
+                                </div>
+                            </div>
                         )}
 
                         {/* ── Exclusions ── */}

@@ -37,7 +37,8 @@ pub fn is_admin() -> bool {
     }
 }
 
-pub fn relaunch_as_admin() {
+/// Restarts elevated. path (a folder) is passed on so the new instance scans it right away.
+pub fn relaunch_as_admin(path: Option<&str>) {
     #[cfg(windows)]
     {
         if is_admin() {
@@ -51,13 +52,20 @@ pub fn relaunch_as_admin() {
         let exe_path = std::env::current_exe().expect("Failed to get current executable path");
         let exe_path_wide: Vec<u16> = exe_path.as_os_str().encode_wide().chain(Some(0)).collect();
         let verb_wide: Vec<u16> = "runas\0".encode_utf16().collect();
+        // `--relaunched` makes the new process wait for this one to exit (single-instance guard)
+        let mut params = String::from("--relaunched");
+        if let Some(p) = path.map(str::trim).filter(|p| !p.is_empty()) {
+            let p = if p.ends_with('\\') { format!("{p}.") } else { p.to_string() };
+            params.push_str(&format!(" \"{p}\""));
+        }
+        let params_wide: Vec<u16> = params.encode_utf16().chain(Some(0)).collect();
 
         unsafe {
             let result = ShellExecuteW(
                 0,
                 verb_wide.as_ptr(),
                 exe_path_wide.as_ptr(),
-                core::ptr::null(),
+                params_wide.as_ptr(),
                 core::ptr::null(),
                 SW_SHOW,
             );

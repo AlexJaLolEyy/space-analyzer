@@ -4,7 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowUpDown, Copy, Download, FolderOpen, FolderSearch, Grid2X2, HardDrive, RotateCcw, Sparkles } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DriveSelector } from "./components/drive/DriveSelector";
 import { BentoDashboard } from "./components/features/BentoDashboard";
 import { CleanupSuggestionsPanel } from "./components/features/CleanupSuggestionsPanel";
@@ -135,6 +135,31 @@ export function MainWorkspace() {
         startScan(trimmed);
     };
 
+    // folder handed over by Explorer ("Analyze with Space Analyzer") at launch or by a second launch
+    const launchRef = useRef<(p: string) => void>(() => {});
+    launchRef.current = (p: string) => {
+        if (isScanning) {
+            addToast("info", "A scan is already running");
+            return;
+        }
+        setShowDashboard(true);
+        scanCustomPath(p);
+    };
+    useEffect(() => {
+        if (typeof window === "undefined" || !("__TAURI_INTERNALS__" in window)) return;
+        let unlisten: (() => void) | undefined;
+        invoke<string | null>("take_launch_path")
+            .then((p) => {
+                if (p) launchRef.current(p);
+            })
+            .catch(() => {});
+        listen<string>("launch-path", (e) => launchRef.current(e.payload))
+            .then((u) => {
+                unlisten = u;
+            })
+            .catch(() => {});
+        return () => unlisten?.();
+    }, []);
     const handleCustomPath = (e: React.FormEvent) => {
         e.preventDefault();
         scanCustomPath(pathInput);
@@ -456,7 +481,7 @@ export function MainWorkspace() {
                 onConfirm={async () => {
                     try {
                         setElevateLoading(true);
-                        await invoke("relaunch_as_admin");
+                        await invoke("relaunch_as_admin", { path: targetPath });
                     } catch (err: any) {
                         addToast("error", `Failed to relaunch elevated: ${err}`);
                         setShowElevationDialog(false);

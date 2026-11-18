@@ -188,7 +188,7 @@ pub fn get_privilege_status(app_state: State<'_, Mutex<crate::AppState>>) -> Res
 }
 
 #[command]
-pub fn relaunch_as_admin() -> Result<(), AppError> {
-    crate::utils::relaunch_as_admin();
+pub fn relaunch_as_admin(path: Option<String>) -> Result<(), AppError> {
+    crate::utils::relaunch_as_admin(path.as_deref());
     Ok(())
 }

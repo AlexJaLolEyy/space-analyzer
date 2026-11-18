@@ -1,4 +1,5 @@
-import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Music, RefreshCw, Shield, ShieldAlert, Trash2, Video } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
+import { AlignLeft, Archive, ArchiveX, Code, Component, FileKey, Folder, HardDrive, Hexagon, Image, Info, Music, RefreshCw, Shield, ShieldAlert, Trash2, Video } from "lucide-react";
 import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
@@ -62,7 +63,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const isBlockedDelete = isSynthetic || isProtected;
 
     const MENU_W = 168;
-    const MENU_H = 180;
+    const MENU_H = 220;
     const handleContextMenu = (e: React.MouseEvent) => {
         e.preventDefault();
         const x = Math.min(e.clientX, window.innerWidth - MENU_W - 4);
@@ -240,6 +241,16 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
                             }}
                         >
                             <RefreshCw size={14} /> {node.is_dir ? "Rescan folder" : "Rescan parent folder"}
+                        </button>                        <button
+                            className="flex items-center gap-2 w-full text-left px-3 py-2 hover:bg-muted rounded-lg transition-colors disabled:opacity-40"
+                            disabled={isSynthetic}
+                            onClick={(e) => {
+                                e.stopPropagation();
+                                handleCloseMenu();
+                                invoke("show_properties", { path: node.path }).catch(() => toast("error", "Could not open properties"));
+                            }}
+                        >
+                            <Info size={14} /> Properties
                         </button>                        <div className="h-px bg-border my-1" />
                         <button
                             type="button"
