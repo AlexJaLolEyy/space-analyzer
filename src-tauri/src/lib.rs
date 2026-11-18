@@ -86,6 +86,7 @@ pub fn run() {
             commands::tree_api::get_cleanup_candidates,
             commands::scanner::cancel_scan,
             commands::scanner::rescan_subtree,
+            commands::scanner::quick_refresh,
             commands::schedule::get_schedule,
             commands::schedule::set_schedule,
             commands::schedule::remove_schedule,

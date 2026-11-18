@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, RefreshCw, Search } from "lucide-react";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { rescanPath } from "../../lib/refresh";
+import { smartRefresh } from "../../lib/refresh";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
 import { useSettingsStore } from "../../stores/settingsStore";
 import type { ScanNode, SearchHit } from "../../types/scan";
@@ -207,8 +207,8 @@ export function ViewContainer() {
                 </div>
 
                 <button
-                    onClick={() => void rescanPath(currentNode.path)}
-                    title="Rescan this folder from disk"
+                    onClick={() => void smartRefresh(currentNode.path)}
+                    title="Refresh this folder from disk"
                     className="p-1.5 rounded-lg bg-secondary/60 border border-border/60 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
                 >
                     <RefreshCw size={13} />

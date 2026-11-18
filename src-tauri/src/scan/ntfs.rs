@@ -169,7 +169,7 @@ fn filetime_to_unix(ft: u64) -> u32 {
     secs.clamp(0, u32::MAX as i64) as u32
 }
 
-struct RecOut {
+pub(crate) struct RecOut {
     rec: u32,
     base: u32,
     is_dir: bool,
@@ -183,7 +183,7 @@ struct RecOut {
     mtime: u32,
 }
 
-fn parse_record(rec: &mut [u8], rec_no: u32, outs: &mut Vec<RecOut>, pool: &mut Vec<u8>) {
+pub(crate) fn parse_record(rec: &mut [u8], rec_no: u32, outs: &mut Vec<RecOut>, pool: &mut Vec<u8>) {
     if rec.len() < 0x30 || &rec[0..4] != b"FILE" {
         return;
     }
@@ -633,4 +633,215 @@ pub fn scan(
             next_usn,
         }),
     })
+}
+
+// ---------- incremental refresh through the USN change journal ----------
+
+const FSCTL_READ_USN_JOURNAL: u32 = 0x0009_00BB;
+
+/// Adds the file record numbers mentioned by the USN records in `buf` (the part after the
+/// leading 8-byte "next USN" of a `FSCTL_READ_USN_JOURNAL` reply) to `out`.
+fn parse_usn_records(buf: &[u8], out: &mut std::collections::HashSet<u32>) {
+    let mut off = 0usize;
+    while off + 24 <= buf.len() {
+        let len = rd32(buf, off) as usize;
+        if len < 24 || off + len > buf.len() {
+            break;
+        }
+        let major = rd16(buf, off + 4);
+        // V2 and V3 both start the file reference at offset 8; NTFS keeps the record number in
+        // its low 48 bits.
+        if major == 2 || major == 3 {
+            let rn = rd64(buf, off + 8) & MASK48;
+            if rn < u32::MAX as u64 {
+                out.insert(rn as u32);
+            }
+        }
+        off += len;
+    }
+}
+
+/// Reads the journal from `start` up to `end` and returns the changed record numbers and the
+/// USN to continue from next time.
+fn read_journal(file: &File, journal_id: u64, start: i64, end: i64) -> Result<(Vec<u32>, i64), String> {
+    let mut changed = std::collections::HashSet::new();
+    let mut usn = start;
+    let mut buf = vec![0u8; 1 << 20];
+    while usn < end {
+        let mut input = [0u8; 40];
+        input[0..8].copy_from_slice(&usn.to_le_bytes());
+        input[8..12].copy_from_slice(&0xFFFF_FFFFu32.to_le_bytes()); // every reason
+        input[12..16].copy_from_slice(&1u32.to_le_bytes()); // only on close: the MFT record is final
+        input[32..40].copy_from_slice(&journal_id.to_le_bytes());
+        let mut ret = 0u32;
+        let ok = unsafe {
+            DeviceIoControl(
+                file.as_raw_handle() as isize,
+                FSCTL_READ_USN_JOURNAL,
+                input.as_ptr().cast(),
+                input.len() as u32,
+                buf.as_mut_ptr().cast(),
+                buf.len() as u32,
+                &mut ret,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err("Could not read the change journal".to_string());
+        }
+        if (ret as usize) < 8 {
+            break;
+        }
+        let next = rd64(&buf, 0) as i64;
+        parse_usn_records(&buf[8..ret as usize], &mut changed);
+        if next <= usn {
+            break;
+        }
+        usn = next;
+    }
+    let mut v: Vec<u32> = changed.into_iter().collect();
+    v.sort_unstable();
+    Ok((v, usn.max(start)))
+}
+
+/// Volume byte offset of MFT record `rn`, or `None` when it lies beyond the known extents.
+fn record_offset(extents: &[(u64, u64)], rn: u64, bpr: u64) -> Option<u64> {
+    let mut pos = rn.checked_mul(bpr)?;
+    for &(off, len) in extents {
+        if pos + bpr <= len {
+            return Some(off + pos);
+        }
+        if pos < len {
+            return None; // record straddles two extents; not expected, let the caller rescan
+        }
+        pos -= len;
+    }
+    None
+}
+
+struct Parsed {
+    rn: u32,
+    outs: Vec<RecOut>,
+    pool: Vec<u8>,
+}
+
+/// Brings a drive-root MFT scan up to date by replaying the USN journal and re-reading just
+/// the changed records. Returns the number of records refreshed. `raw` is only modified once
+/// every read succeeded, so on `Err` the caller can keep it as is and fall back to a rescan
+/// (journal wrapped or recreated, MFT grew, volume unreadable).
+pub fn quick_refresh(raw: &mut RawScan) -> Result<usize, String> {
+    let meta = raw.mft_meta.clone().ok_or("No change journal information for this scan")?;
+    let vol_path = format!(r"\\.\{}", meta.volume);
+    let file = OpenOptions::new()
+        .read(true)
+        .share_mode(7)
+        .open(&vol_path)
+        .map_err(|e| format!("Cannot open volume {vol_path}: {e}"))?;
+    let (journal_id, first, next) = query_usn_journal(&file).ok_or("The change journal is no longer available")?;
+    if journal_id != meta.journal_id || meta.next_usn < first {
+        return Err("The change journal was reset since the scan".to_string());
+    }
+    let (changed, new_usn) = read_journal(&file, journal_id, meta.next_usn, next)?;
+
+    let bpr = meta.bytes_per_record as usize;
+    let mut parsed: Vec<Parsed> = Vec::with_capacity(changed.len());
+    let mut rec = vec![0u8; bpr];
+    for &rn in &changed {
+        if rn as usize >= raw.parent.len() {
+            return Err("The file table grew since the scan".to_string());
+        }
+        let off = record_offset(&meta.extents, rn as u64, bpr as u64).ok_or("The file table layout changed")?;
+        read_exact_at(&file, off, &mut rec)?;
+        let mut p = Parsed { rn, outs: Vec::new(), pool: Vec::new() };
+        parse_record(&mut rec, rn, &mut p.outs, &mut p.pool);
+        parsed.push(p);
+    }
+
+    // all reads succeeded: patch the columns
+    for p in &parsed {
+        let i = p.rn as usize;
+        let own = p.outs.iter().find(|r| r.base == NONE);
+        match own {
+            None if p.outs.is_empty() => raw.flags[i] = 0, // record freed
+            Some(r) => {
+                raw.flags[i] = F_USED | if r.is_dir { F_DIR } else { 0 };
+                raw.mtime[i] = r.mtime;
+                if r.has_name {
+                    set_name(raw, i, r, &p.pool);
+                } else if raw.name_len[i] == 0 {
+                    raw.flags[i] = 0;
+                }
+                if r.has_data {
+                    raw.size[i] = r.size;
+                    raw.alloc[i] = r.alloc;
+                } else if r.is_dir {
+                    raw.size[i] = 0;
+                    raw.alloc[i] = 0;
+                }
+                // files whose data lives in an extension record keep their previous size
+            }
+            None => {}
+        }
+        // extension records carry attributes for their base record
+        for r in p.outs.iter().filter(|r| r.base != NONE) {
+            let b = r.base as usize;
+            if b >= raw.parent.len() || raw.flags[b] & F_USED == 0 {
+                continue;
+            }
+            if r.has_data && raw.flags[b] & F_DIR == 0 {
+                raw.size[b] = r.size;
+                raw.alloc[b] = r.alloc;
+            }
+            if r.has_name && raw.name_len[b] == 0 {
+                set_name(raw, b, r, &p.pool);
+            }
+        }
+    }
+    if let Some(m) = raw.mft_meta.as_mut() {
+        m.next_usn = new_usn;
+    }
+    Ok(parsed.len())
+}
+
+fn set_name(raw: &mut RawScan, i: usize, r: &RecOut, pool: &[u8]) {
+    raw.name_off[i] = raw.names.len() as u32;
+    raw.name_len[i] = r.name_len;
+    raw.names
+        .extend_from_slice(&pool[r.name_off as usize..r.name_off as usize + r.name_len as usize]);
+    raw.parent[i] = r.parent;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usn_record(version: u16, frn: u64) -> Vec<u8> {
+        let mut r = vec![0u8; 64];
+        r[0..4].copy_from_slice(&64u32.to_le_bytes());
+        r[4..6].copy_from_slice(&version.to_le_bytes());
+        r[8..16].copy_from_slice(&frn.to_le_bytes());
+        r
+    }
+
+    #[test]
+    fn parses_usn_records() {
+        let mut buf = usn_record(2, 0x0003_0000_0000_1234);
+        buf.extend(usn_record(3, 77));
+        buf.extend(usn_record(4, 99)); // range-tracking record: ignored
+        let mut set = std::collections::HashSet::new();
+        parse_usn_records(&buf, &mut set);
+        let mut v: Vec<u32> = set.into_iter().collect();
+        v.sort();
+        assert_eq!(v, vec![77, 0x1234]);
+    }
+
+    #[test]
+    fn finds_record_offsets() {
+        let ext = [(1000u64, 4096u64), (100_000, 2048)];
+        assert_eq!(record_offset(&ext, 0, 1024), Some(1000));
+        assert_eq!(record_offset(&ext, 3, 1024), Some(1000 + 3072));
+        assert_eq!(record_offset(&ext, 4, 1024), Some(100_000));
+        assert_eq!(record_offset(&ext, 5, 1024), Some(101_024));
+        assert_eq!(record_offset(&ext, 6, 1024), None);
+    }
 }

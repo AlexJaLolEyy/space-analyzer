@@ -71,3 +71,42 @@ export async function rescanPath(path: string): Promise<void> {
         rescanning = false;
     }
 }
+
+interface QuickRefreshResult {
+    status: "refreshed" | "unsupported" | "needs_rescan";
+    changed: number;
+    message?: string;
+}
+
+/**
+ * Refresh button: for a Turbo scan of a whole drive the NTFS change journal brings everything
+ * up to date in about a second; otherwise the folder is rescanned from disk.
+ */
+export async function smartRefresh(path: string): Promise<void> {
+    const s = useScanStore.getState();
+    const root = s.scanTree?.path;
+    const toast = useToastStore.getState().addToast;
+    if (root && s.scanInfo?.engine === "Turbo" && path.toLowerCase() === root.toLowerCase()) {
+        try {
+            const r = await invoke<QuickRefreshResult>("quick_refresh");
+            if (r.status === "refreshed") {
+                // every folder may have changed: re-read the open chain from the root downwards
+                const st = useScanStore.getState();
+                for (let k = 1; k <= st.currentPath.length; k++) {
+                    const p = findNodeByPath(st.scanTree, st.currentPath.slice(0, k))?.path;
+                    if (p) await refreshPath(p);
+                }
+                toast("success", r.changed === 0 ? "Already up to date" : `Applied ${r.changed.toLocaleString()} changes`);
+                return;
+            }
+            if (r.status === "needs_rescan") {
+                toast("warning", `${r.message ?? "The change journal can't be replayed"}. Run a new scan to refresh everything.`);
+                return;
+            }
+        } catch (e) {
+            toast("error", `Refresh failed: ${e}`);
+            return;
+        }
+    }
+    await rescanPath(path);
+}

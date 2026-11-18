@@ -165,6 +165,43 @@ pub async fn rescan_subtree(
     Ok(node)
 }
 
+#[derive(serde::Serialize)]
+pub struct QuickRefresh {
+    /// "refreshed", "unsupported" (not a Turbo drive-root scan) or "needs_rescan" (journal can't be replayed).
+    pub status: &'static str,
+    pub changed: usize,
+    pub message: Option<String>,
+}
+
+/// Brings a Turbo drive-root scan up to date from the NTFS change journal in a second or two,
+/// without walking the disk.
+#[command]
+pub async fn quick_refresh(app: AppHandle, session: State<'_, ScanSession>) -> Result<QuickRefresh, AppError> {
+    let result = session
+        .write(move |a| {
+            const ROOT_RECORD: u32 = 5;
+            if a.root_id() != ROOT_RECORD || a.mft_meta().is_none() {
+                return Ok(QuickRefresh { status: "unsupported", changed: 0, message: None });
+            }
+            let cancel = AtomicBool::new(false);
+            let this = std::mem::take(a);
+            let (mut raw, meta) = this.into_raw();
+            let outcome = crate::scan::ntfs::quick_refresh(&mut raw);
+            // `quick_refresh` only touches `raw` after every read succeeded, so rebuilding is
+            // correct for both outcomes.
+            *a = crate::models::flat_scan::ScanArena::from_raw_with_meta(raw, meta, &cancel)?;
+            Ok(match outcome {
+                Ok(changed) => QuickRefresh { status: "refreshed", changed, message: None },
+                Err(e) => QuickRefresh { status: "needs_rescan", changed: 0, message: Some(e) },
+            })
+        })
+        .await?;
+    if result.status == "refreshed" {
+        spawn_deltas(app, session.inner().clone());
+    }
+    Ok(result)
+}
+
 /// Recomputes "changes since last scan" in the background after the tree was patched.
 fn spawn_deltas(app: AppHandle, session: ScanSession) {
     std::thread::spawn(move || {
