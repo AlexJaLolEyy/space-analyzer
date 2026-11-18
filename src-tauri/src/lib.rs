@@ -11,7 +11,6 @@ use std::sync::Mutex;
 
 pub struct AppState {
     pub scan_root: Option<PathBuf>,
-    pub delete_lock: Mutex<()>,
     pub is_elevated: bool,
 }
 
@@ -37,7 +36,6 @@ pub fn run() {
         }))
         .manage(Mutex::new(AppState {
             scan_root: None,
-            delete_lock: Mutex::new(()),
             is_elevated: crate::utils::is_admin(),
         }))
         .manage(scan_session::ScanSession::new())

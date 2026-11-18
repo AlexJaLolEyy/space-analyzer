@@ -3,7 +3,6 @@ import { useState } from "react";
 import { getCategoryColor } from "../../lib/colors";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
 import { formatBytes } from "../../lib/format";
-import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 import type { FileCategory, ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
@@ -50,10 +49,6 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const color = getCategoryColor(node.category);
     const extBadge = !isDir ? getExtBadge(node.name) : null;
 
-    const addToast = useToastStore((s) => s.addToast);
-    const removeNode = useScanStore((s) => s.removeNode);
-    const restoreRemovedNode = useScanStore((s) => s.restoreRemovedNode);
-
     const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
     const [deleteConfig, setDeleteConfig] = useState<{ mode: "recycle" | "permanent"; open: boolean }>({ mode: "recycle", open: false });
 
@@ -72,6 +67,9 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
 
     const handleCloseMenu = () => setMenuPos(null);
 
+    const toast = (type: Parameters<ReturnType<typeof useToastStore.getState>["addToast"]>[0], msg: string) =>
+        useToastStore.getState().addToast(type, msg);
+
     const handleOpenInExplorer = async (e: React.MouseEvent) => {
         e.stopPropagation();
         handleCloseMenu();
@@ -79,7 +77,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
             const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
             await revealItemInDir(node.path);
         } catch {
-            addToast("error", "Failed to open path");
+            toast("error", "Failed to open path");
         }
     };
 
@@ -88,9 +86,9 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
         handleCloseMenu();
         try {
             await navigator.clipboard.writeText(node.path);
-            addToast("success", "Path copied to clipboard");
+            toast("success", "Path copied to clipboard");
         } catch {
-            addToast("error", "Failed to copy path");
+            toast("error", "Failed to copy path");
         }
     };
 
@@ -98,7 +96,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
         e.stopPropagation();
         handleCloseMenu();
         if (isBlockedDelete) {
-            addToast(
+            toast(
                 "warning",
                 isProtected ? "System-protected file — deletion disabled." : "This aggregate entry cannot be deleted."
             );
@@ -110,13 +108,7 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
     const confirmDelete = () => {
         const permanent = deleteConfig.mode === "permanent";
         setDeleteConfig({ mode: deleteConfig.mode, open: false });
-        scheduleDeferredDelete({
-            node,
-            permanent,
-            removeNode,
-            restoreRemovedNode,
-            addToast,
-        });
+        scheduleDeferredDelete({ node, permanent });
     };
 
     return (
@@ -167,6 +159,10 @@ export function ListItem({ node, parentSize, onActivate, isSelected, isFocused, 
 
                     <span className="text-sm font-mono font-medium whitespace-nowrap tabular-nums">
                         {formatBytes(node.size)}
+                    </span>
+
+                    <span className="text-xs text-muted-foreground tabular-nums w-24 text-right">
+                        {node.last_modified ? new Date(node.last_modified * 1000).toLocaleDateString() : "—"}
                     </span>
 
                     <div className="w-20 h-2 bg-secondary rounded-full overflow-hidden">

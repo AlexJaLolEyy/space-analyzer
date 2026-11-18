@@ -4,6 +4,7 @@ import { writeTextFile } from "@tauri-apps/plugin-fs";
 import { Download, Trash2, X } from "lucide-react";
 import { useState } from "react";
 import { findNodeByAbsolutePath, useScanStore } from "../../stores/scanStore";
+import { scheduleDeferredDeleteMany } from "../../lib/deferredDelete";
 import { useToastStore } from "../../stores/toastStore";
 import type { ScanNode } from "../../types/scan";
 import { ConfirmModal } from "./ConfirmModal";
@@ -12,12 +13,9 @@ export function SelectionActionBar() {
     const scanTree = useScanStore((s) => s.scanTree);
     const selectedPaths = useScanStore((s) => s.selectedPaths);
     const clearSelection = useScanStore((s) => s.clearSelection);
-    const removeNode = useScanStore((s) => s.removeNode);
-    const removePathsFromSelection = useScanStore((s) => s.removePathsFromSelection);
     const addToast = useToastStore((s) => s.addToast);
 
     const [deleteOpen, setDeleteOpen] = useState(false);
-    const [deleting, setDeleting] = useState(false);
 
     if (!scanTree || selectedPaths.length === 0) return null;
 
@@ -58,22 +56,11 @@ export function SelectionActionBar() {
         }
     };
 
-    const confirmBatchDelete = async () => {
+    const confirmBatchDelete = () => {
         if (deletable.length === 0) return;
-        setDeleting(true);
-        try {
-            await invoke("delete_items", { paths: deletable, permanent: false });
-            for (const p of deletable) removeNode(p);
-            removePathsFromSelection(deletable);
-            addToast("success", `Moved ${deletable.length} item(s) to Recycle Bin`);
-        } catch (e) {
-            addToast("error", `Delete failed: ${e}`);
-        } finally {
-            setDeleting(false);
-            setDeleteOpen(false);
-        }
+        setDeleteOpen(false);
+        scheduleDeferredDeleteMany(deletable, { permanent: false });
     };
-
     return (
         <>
             <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-40 flex items-center gap-2 px-4 py-2.5 rounded-xl border border-border bg-popover/95 backdrop-blur-md shadow-xl">
@@ -119,7 +106,7 @@ export function SelectionActionBar() {
                 message={`Move ${deletable.length} item(s) to the Recycle Bin?`}
                 confirmLabel="Move to Bin"
                 variant="warning"
-                isLoading={deleting}
+                isLoading={false}
                 onConfirm={confirmBatchDelete}
                 onCancel={() => setDeleteOpen(false)}
             />

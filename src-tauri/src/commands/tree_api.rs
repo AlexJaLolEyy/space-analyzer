@@ -52,22 +52,22 @@ pub struct SearchHit {
 }
 
 #[command]
-pub fn get_children(
+pub async fn get_children(
     session: State<'_, ScanSession>,
     path: String,
     child_depth: Option<u32>,
 ) -> Result<Vec<ScanNode>, AppError> {
     let cd = child_depth.unwrap_or(1).max(1);
-    session.with_arena(|arena| arena.children_as_scan(&path, cd))
+    session.read(move |arena| arena.children_as_scan(&path, cd)).await
 }
 
 #[command]
-pub fn get_node_info(session: State<'_, ScanSession>, path: String) -> Result<ScanNode, AppError> {
-    session.with_arena(|arena| arena.get_node_info(&path))
+pub async fn get_node_info(session: State<'_, ScanSession>, path: String) -> Result<ScanNode, AppError> {
+    session.read(move |arena| arena.get_node_info(&path)).await
 }
 
 #[command]
-pub fn search_nodes(
+pub async fn search_nodes(
     session: State<'_, ScanSession>,
     query: String,
     max_results: Option<u32>,
@@ -76,19 +76,26 @@ pub fn search_nodes(
     if query.is_empty() {
         return Ok(vec![]);
     }
+    let ascii = query.is_ascii();
     let q_lower = query.to_lowercase();
-    let needle = q_lower.as_bytes();
 
-    session.with_arena(|a| {
+    session.read(move |a| {
         let root = a.root_id();
+        let needle = q_lower.as_bytes();
         let mut ids: Vec<u32> = (0..a.len() as u32)
             .into_par_iter()
             .filter(|&id| {
                 if id == root || !a.is_used(id) {
                     return false;
                 }
-                let lower = a.name(id).to_lowercase();
-                memmem::find(lower.as_bytes(), needle).is_some()
+                if ascii {
+                    let hay = a.name(id).as_bytes();
+                    hay.len() >= needle.len()
+                        && hay.windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+                } else {
+                    let lower = a.name(id).to_lowercase();
+                    memmem::find(lower.as_bytes(), needle).is_some()
+                }
             })
             .collect();
         if ids.len() > max_r {
@@ -109,7 +116,7 @@ pub fn search_nodes(
                 protected: a.is_protected(id),
             })
             .collect())
-    })
+    }).await
 }
 
 fn top_file_ids(a: &ScanArena, take: usize) -> Vec<u32> {
@@ -126,17 +133,17 @@ fn top_file_ids(a: &ScanArena, take: usize) -> Vec<u32> {
 }
 
 #[command]
-pub fn get_top_files(session: State<'_, ScanSession>, n: Option<u32>) -> Result<Vec<ScanNode>, AppError> {
+pub async fn get_top_files(session: State<'_, ScanSession>, n: Option<u32>) -> Result<Vec<ScanNode>, AppError> {
     let take = n.unwrap_or(100).clamp(1, 10_000) as usize;
-    session.with_arena(|a| Ok(top_file_ids(a, take).into_iter().map(|id| a.node_to_scan(id, 0)).collect()))
+    session.read(move |a| Ok(top_file_ids(a, take).into_iter().map(|id| a.node_to_scan(id, 0)).collect())).await
 }
 
 #[command]
-pub fn get_category_breakdown(
+pub async fn get_category_breakdown(
     session: State<'_, ScanSession>,
     _path: String,
 ) -> Result<Vec<CategoryBreakdownEntry>, AppError> {
-    session.with_arena(|a| {
+    session.read(move |a| {
         let mut v: Vec<CategoryBreakdownEntry> = FileCategory::ALL
             .iter()
             .zip(a.cat_totals().iter())
@@ -148,17 +155,17 @@ pub fn get_category_breakdown(
             .collect();
         v.sort_by(|x, y| y.size.cmp(&x.size));
         Ok(v)
-    })
+    }).await
 }
 
 #[command]
-pub fn get_black_holes(
+pub async fn get_black_holes(
     session: State<'_, ScanSession>,
     limit: Option<u32>,
 ) -> Result<Vec<BlackHoleEntry>, AppError> {
     let lim = limit.unwrap_or(50).min(500) as usize;
     const MIN_SIZE: u64 = 1024 * 1024 * 1024;
-    session.with_arena(|a| {
+    session.read(move |a| {
         let mut holes: Vec<(u32, u32)> = Vec::new();
         let mut stack = vec![(a.root_id(), 0u32)];
         while let Some((id, d)) = stack.pop() {
@@ -184,12 +191,12 @@ pub fn get_black_holes(
                 depth,
             })
             .collect())
-    })
+    }).await
 }
 
 #[command]
-pub fn get_dashboard_stats(session: State<'_, ScanSession>) -> Result<DashboardStats, AppError> {
-    session.with_arena(|a| {
+pub async fn get_dashboard_stats(session: State<'_, ScanSession>) -> Result<DashboardStats, AppError> {
+    session.read(move |a| {
         let mut top_categories: Vec<NamedSize> = FileCategory::ALL
             .iter()
             .zip(a.cat_totals().iter())
@@ -217,16 +224,16 @@ pub fn get_dashboard_stats(session: State<'_, ScanSession>) -> Result<DashboardS
             total_file_count: a.total_files(),
             total_size: a.total_size(),
         })
-    })
+    }).await
 }
 
 /// Full subtree for small exports (selection). Large exports use `export_scan`.
 #[command]
-pub fn get_export_subtree(session: State<'_, ScanSession>, path: String) -> Result<ScanNode, AppError> {
-    session.with_arena(|a| {
+pub async fn get_export_subtree(session: State<'_, ScanSession>, path: String) -> Result<ScanNode, AppError> {
+    session.read(move |a| {
         let id = a.resolve_path(&path)?;
         Ok(a.subtree_full(id))
-    })
+    }).await
 }
 
 #[derive(Serialize)]
@@ -246,9 +253,9 @@ pub struct CleanupCandidates {
 /// Scans the whole arena (not just the folders loaded in the UI) for well-known cleanup locations.
 /// Only files directly inside the matched folders are returned.
 #[command]
-pub fn get_cleanup_candidates(session: State<'_, ScanSession>) -> Result<CleanupCandidates, AppError> {
+pub async fn get_cleanup_candidates(session: State<'_, ScanSession>) -> Result<CleanupCandidates, AppError> {
     const MAX_PER_BUCKET: usize = 20_000;
-    session.with_arena(|a| {
+    session.read(move |a| {
         #[derive(Clone, Copy, PartialEq)]
         enum Bucket {
             Temp,
@@ -305,7 +312,7 @@ pub fn get_cleanup_candidates(session: State<'_, ScanSession>) -> Result<Cleanup
             v.truncate(MAX_PER_BUCKET);
         }
         Ok(out)
-    })
+    }).await
 }
 
 fn csv_escape(s: &str) -> String {
@@ -371,13 +378,13 @@ fn write_json_node<W: Write>(a: &ScanArena, w: &mut W, id: u32, path: &str) -> s
 
 /// Streams the subtree at `path` straight to `dest` (format: "json" or "csv").
 #[command]
-pub fn export_scan(
+pub async fn export_scan(
     session: State<'_, ScanSession>,
     path: String,
     dest: String,
     format: String,
 ) -> Result<u64, AppError> {
-    session.with_arena(|a| {
+    session.read(move |a| {
         let id = a.resolve_path(&path)?;
         let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
         let mut w = BufWriter::with_capacity(1 << 20, file);
@@ -391,5 +398,5 @@ pub fn export_scan(
         };
         res.and_then(|_| w.flush()).map_err(|e| e.to_string())?;
         Ok(a.file_count(id))
-    })
+    }).await
 }

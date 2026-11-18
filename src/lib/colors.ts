@@ -31,16 +31,26 @@ const FALLBACK_COLORS: Record<FileCategory, string> = {
     Other: "hsl(220, 10%, 60%)",
 };
 
+const colorCache = new Map<FileCategory, string>();
+
+/** Call when the theme or accent changes so cached CSS-variable colors are re-read. */
+export function resetColorCache(): void {
+    colorCache.clear();
+}
+
 export function getCategoryColor(category: FileCategory): string {
+    const hit = colorCache.get(category);
+    if (hit) return hit;
+    let color = FALLBACK_COLORS[category] ?? FALLBACK_COLORS.Other;
     if (typeof window !== "undefined") {
         const val = getComputedStyle(document.documentElement)
             .getPropertyValue(CSS_VAR_MAP[category])
             .trim();
-        if (val) return val;
+        if (val) color = val;
     }
-    return FALLBACK_COLORS[category] ?? FALLBACK_COLORS.Other;
+    colorCache.set(category, color);
+    return color;
 }
-
 // Convenience array of all category keys in display order
 export const CATEGORY_KEYS: FileCategory[] = [
     "Video", "Image", "Audio", "Document", "Archive",

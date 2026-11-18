@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { AlertTriangle, FolderMinus, Sparkles, Trash2 } from "lucide-react";
 import { formatBytes } from "../../lib/format";
 import { invoke } from "@tauri-apps/api/core";
+import { scheduleDeferredDeleteMany } from "../../lib/deferredDelete";
 import { useToastStore } from "../../stores/toastStore";
 import { ConfirmModal } from "../ui/ConfirmModal";
 
@@ -35,7 +36,6 @@ const ONE_GB = 1024 ** 3;
 export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProps) {
     const addToast = useToastStore((state) => state.addToast);
     const [safeMode, setSafeMode] = useState(true);
-    const [cleaning, setCleaning] = useState<string | null>(null);
     const [confirmTarget, setConfirmTarget] = useState<Suggestion | null>(null);
 
     const [rawSuggestions, setRawSuggestions] = useState<Suggestion[]>([]);
@@ -80,17 +80,19 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
             .sort((a, b) => b.totalSize - a.totalSize);
     }, [rawSuggestions, safeMode]);
 
-    const runClean = async (s: Suggestion, paths: string[]) => {
-        setCleaning(s.id);
-        try {
-            await invoke("delete_items", { paths, permanent: false });
-            addToast("success", `Cleaned up ${s.title}`);
-            setConfirmTarget(null);
-        } catch (err: unknown) {
-            addToast("error", `Failed to clean ${s.title}: ${err}`);
-        } finally {
-            setCleaning(null);
-        }
+    const runClean = (_s: Suggestion, paths: string[]) => {
+        const drop = new Set(paths);
+        const before = rawSuggestions;
+        setRawSuggestions((prev) =>
+            prev
+                .map((x) => ({ ...x, files: x.files.filter((f) => !drop.has(f.path)) }))
+                .filter((x) => x.files.length > 0)
+        );
+        setConfirmTarget(null);
+        scheduleDeferredDeleteMany(paths, {
+            onUndo: () => setRawSuggestions(before),
+            onFailed: () => setRawSuggestions(before),
+        });
     };
 
     const confirmBody = confirmTarget
@@ -197,16 +199,9 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
                             </ul>
                             <button
                                 onClick={() => setConfirmTarget(s)}
-                                disabled={cleaning === s.id}
                                 className="mt-1 w-full py-2 bg-primary text-primary-foreground font-medium rounded-xl hover:bg-primary/90 transition disabled:opacity-50 flex items-center justify-center gap-2"
                             >
-                                {cleaning === s.id ? (
-                                    "Cleaning..."
-                                ) : (
-                                    <>
-                                        <Trash2 size={16} /> Clean {formatBytes(s.totalSize)}
-                                    </>
-                                )}
+                                <Trash2 size={16} /> Clean {formatBytes(s.totalSize)}
                             </button>
                         </div>
                     ))
@@ -219,7 +214,7 @@ export function CleanupSuggestionsPanel({ onClose }: CleanupSuggestionsPanelProp
                 message={confirmBody}
                 confirmLabel="Move to Recycle Bin"
                 variant="warning"
-                isLoading={!!cleaning}
+                isLoading={false}
                 onConfirm={() => {
                     if (!confirmTarget) return;
                     const active = safeMode

@@ -3,7 +3,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { scheduleDeferredDelete } from "../../lib/deferredDelete";
 import { formatBytes } from "../../lib/format";
 import { useScanStore } from "../../stores/scanStore";
-import { useToastStore } from "../../stores/toastStore";
 import type { ScanNode } from "../../types/scan";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { LIST_ROW_HEIGHT, ListItem } from "./ListItem";
@@ -23,9 +22,6 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
     const selectRowClick = useScanStore((s) => s.selectRowClick);
     const selectedPaths = useScanStore((s) => s.selectedPaths);
     const navigateToAbsolutePath = useScanStore((s) => s.navigateToAbsolutePath);
-    const addToast = useToastStore((s) => s.addToast);
-    const removeNode = useScanStore((s) => s.removeNode);
-    const restoreRemovedNode = useScanStore((s) => s.restoreRemovedNode);
 
     const [focusedIndex, setFocusedIndex] = useState(0);
     const [keyDeleteTarget, setKeyDeleteTarget] = useState<ScanNode | null>(null);
@@ -138,13 +134,7 @@ export function ListView({ node, searchMode = false }: ListViewProps) {
         if (!keyDeleteTarget) return;
         const target = keyDeleteTarget;
         setKeyDeleteTarget(null);
-        scheduleDeferredDelete({
-            node: target,
-            permanent: false,
-            removeNode,
-            restoreRemovedNode,
-            addToast,
-        });
+        scheduleDeferredDelete({ node: target, permanent: false });
     };
 
     return (

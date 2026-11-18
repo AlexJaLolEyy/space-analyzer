@@ -81,56 +81,55 @@ fn delete_one(canonical: &Path, permanent: bool) -> Result<(), AppError> {
     Ok(())
 }
 
+static DELETE_LOCK: Mutex<()> = Mutex::new(());
+
 #[tauri::command]
-pub fn delete_item(
+pub async fn delete_item(
     app_state: State<'_, Mutex<crate::AppState>>,
     session: State<'_, ScanSession>,
     path: String,
     permanent: bool,
 ) -> Result<(), AppError> {
-    let app_state_lock = app_state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let _delete_guard = app_state_lock
-        .delete_lock
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-
-    let canonical = validate_delete_path(&path, app_state_lock.scan_root.as_ref())?;
-    delete_one(&canonical, permanent)?;
-    let _ = session.with_arena_mut(|a| a.remove_path(&path));
-
-    Ok(())
+    let scan_root = app_state.lock().unwrap_or_else(|e| e.into_inner()).scan_root.clone();
+    let session = session.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _delete_guard = DELETE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let canonical = validate_delete_path(&path, scan_root.as_ref())?;
+        delete_one(&canonical, permanent)?;
+        let _ = session.with_arena_mut(|a| a.remove_path(&path));
+        Ok(())
+    })
+    .await
+    .map_err(|e| AppError::Internal { message: e.to_string() })?
 }
 
 #[tauri::command]
-pub fn delete_items(
+pub async fn delete_items(
     app_state: State<'_, Mutex<crate::AppState>>,
     session: State<'_, ScanSession>,
     paths: Vec<String>,
     permanent: bool,
 ) -> Result<Vec<String>, AppError> {
-    let mut failed = Vec::new();
-    let app_state_lock = app_state
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let _delete_guard = app_state_lock
-        .delete_lock
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let scan_root = app_state.lock().unwrap_or_else(|e| e.into_inner()).scan_root.clone();
+    let session = session.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _delete_guard = DELETE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut failed = Vec::new();
+        for path in paths {
+            let res = (|| {
+                let canonical = validate_delete_path(&path, scan_root.as_ref())?;
+                delete_one(&canonical, permanent)?;
+                Ok::<(), AppError>(())
+            })();
 
-    for path in paths {
-        let res = (|| {
-            let canonical = validate_delete_path(&path, app_state_lock.scan_root.as_ref())?;
-            delete_one(&canonical, permanent)?;
-            Ok::<(), AppError>(())
-        })();
-
-        if res.is_err() {
-            failed.push(path);
-        } else {
-            let _ = session.with_arena_mut(|a| a.remove_path(&path));
+            if res.is_err() {
+                failed.push(path);
+            } else {
+                let _ = session.with_arena_mut(|a| a.remove_path(&path));
+            }
         }
-    }
-    Ok(failed)
+        Ok(failed)
+    })
+    .await
+    .map_err(|e| AppError::Internal { message: e.to_string() })?
 }

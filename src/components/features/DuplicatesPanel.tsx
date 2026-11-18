@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Copy, Search, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { formatBytes } from "../../lib/format";
+import { scheduleDeferredDeleteMany } from "../../lib/deferredDelete";
 import { useScanStore } from "../../stores/scanStore";
 import { useToastStore } from "../../stores/toastStore";
 import { ConfirmModal } from "../ui/ConfirmModal";
@@ -32,7 +34,6 @@ interface DuplicatesPanelProps {
 
 export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
     const scanTree = useScanStore((s) => s.scanTree);
-    const removeNode = useScanStore((s) => s.removeNode);
     const { addToast } = useToastStore();
     const [groups, setGroups] = useState<DuplicateGroup[]>([]);
     const [scanEverRun, setScanEverRun] = useState(false);
@@ -45,7 +46,6 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
         open: boolean;
         targets: string[];
     }>({ mode: "recycle", open: false, targets: [] });
-    const [isDeleting, setIsDeleting] = useState(false);
 
     useEffect(() => {
         setScanEverRun(false);
@@ -101,6 +101,14 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
         g.files.some((f) => f.name.toLowerCase().includes(searchQuery.toLowerCase()))
     );
 
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const virtualizer = useVirtualizer({
+        count: filteredGroups.length,
+        getScrollElement: () => scrollRef.current,
+        estimateSize: () => 150,
+        overscan: 4,
+    });
+
     const totalWasted = groups.reduce((acc, g) => acc + g.total_wasted, 0);
 
     const handleKeepBest = (group: DuplicateGroup) => {
@@ -108,32 +116,23 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
         setDeleteConfig({ mode: "recycle", open: true, targets: toDelete });
     };
 
-    const confirmDelete = async () => {
-        setIsDeleting(true);
-        try {
-            await invoke("delete_items", { paths: deleteConfig.targets, permanent: deleteConfig.mode === "permanent" });
-            addToast("success", `Successfully processed duplicates`);
-
-            for (const path of deleteConfig.targets) {
-                removeNode(path);
-            }
-            setGroups((prev) =>
-                prev
-                    .map((g) => ({
-                        ...g,
-                        files: g.files.filter((f) => !deleteConfig.targets.includes(f.path)),
-                    }))
-                    .filter((g) => g.files.length > 1)
-            );
-        } catch (err) {
-            console.error(err);
-            addToast("error", `Failed to delete items: ${err}`);
-        } finally {
-            setIsDeleting(false);
-            setDeleteConfig({ ...deleteConfig, open: false, targets: [] });
-        }
+    const confirmDelete = () => {
+        const targets = deleteConfig.targets;
+        const permanent = deleteConfig.mode === "permanent";
+        const before = groups;
+        const drop = new Set(targets);
+        setDeleteConfig({ ...deleteConfig, open: false, targets: [] });
+        setGroups((prev) =>
+            prev
+                .map((g) => ({ ...g, files: g.files.filter((f) => !drop.has(f.path)) }))
+                .filter((g) => g.files.length > 1)
+        );
+        scheduleDeferredDeleteMany(targets, {
+            permanent,
+            onUndo: () => setGroups(before),
+            onFailed: () => setGroups(before),
+        });
     };
-
     const progressLabel =
         progress && progress.total > 0
             ? progress.phase === "full_hash"
@@ -224,7 +223,7 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                 </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
                 {loading ? (
                     <div className="flex flex-col items-center justify-center h-full text-muted-foreground gap-2">
                         <span className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -251,8 +250,18 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                         <p>No duplicates match your search.</p>
                     </div>
                 ) : (
-                    filteredGroups.map((group, idx) => (
-                        <div key={`${group.content_hash}-${idx}`} className="bg-secondary/50 border border-border rounded-xl flex flex-col overflow-hidden">
+                    <div style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}>
+                        {virtualizer.getVirtualItems().map((vr) => {
+                            const group = filteredGroups[vr.index];
+                            if (!group) return null;
+                            return (
+                        <div
+                            key={`${group.content_hash}-${vr.index}`}
+                            data-index={vr.index}
+                            ref={virtualizer.measureElement}
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", transform: `translateY(${vr.start}px)`, paddingBottom: 16 }}
+                        >
+                        <div className="bg-secondary/50 border border-border rounded-xl flex flex-col overflow-hidden">
                             <div className="flex items-center justify-between p-3 bg-secondary/80 border-b border-border gap-2">
                                 <div className="min-w-0 flex-1">
                                     <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-semibold">SHA-256</p>
@@ -296,7 +305,10 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                                 ))}
                             </div>
                         </div>
-                    ))
+                        </div>
+                            );
+                        })}
+                    </div>
                 )}
             </div>
 
@@ -306,7 +318,7 @@ export function DuplicatesPanel({ onClose }: DuplicatesPanelProps) {
                 message={`Are you sure you want to move ${deleteConfig.targets.length} file(s) to the Recycle Bin?`}
                 confirmLabel="Move to Bin"
                 variant="warning"
-                isLoading={isDeleting}
+                isLoading={false}
                 onConfirm={confirmDelete}
                 onCancel={() => setDeleteConfig({ ...deleteConfig, open: false })}
             />

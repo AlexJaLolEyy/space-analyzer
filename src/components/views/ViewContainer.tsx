@@ -1,14 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChartHorizontal, ChevronLeft, ChevronRight, Grid2X2, Home, LayoutList, PieChart, Search, CircleDashed } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { findNodeByPath, useScanStore } from "../../stores/scanStore";
 import type { ScanNode, SearchHit } from "../../types/scan";
 import { ViewChartErrorBoundary } from "../ui/ViewChartErrorBoundary";
-import { BarChartView } from "./BarChartView";
 import { ListView } from "./ListView";
-import { PieChartView } from "./PieChartView";
-import { TreemapView } from "./TreemapView";
+
+const PieChartView = lazy(() => import("./PieChartView").then((m) => ({ default: m.PieChartView })));
+const BarChartView = lazy(() => import("./BarChartView").then((m) => ({ default: m.BarChartView })));
+const TreemapView = lazy(() => import("./TreemapView").then((m) => ({ default: m.TreemapView })));
 import { SunburstView } from "./SunburstView";
 
 const VIEW_BUTTONS = [
@@ -48,6 +49,7 @@ export function ViewContainer() {
 
     const [searchHits, setSearchHits] = useState<SearchHit[]>([]);
     const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const searchSeq = useRef(0);
 
     const trimmedQuery = searchQuery.trim();
 
@@ -58,20 +60,22 @@ export function ViewContainer() {
         }
         if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
         if (!trimmedQuery) {
+            searchSeq.current++;
             setSearchHits([]);
             return;
         }
         searchDebounceRef.current = setTimeout(() => {
+            const seq = ++searchSeq.current;
             void (async () => {
                 try {
                     const hits = await invoke<SearchHit[]>("search_nodes", {
                         query: trimmedQuery,
                         maxResults: 500,
                     });
-                    setSearchHits(hits);
+                    if (seq === searchSeq.current) setSearchHits(hits);
                 } catch (e) {
                     console.error("search_nodes failed:", e);
-                    setSearchHits([]);
+                    if (seq === searchSeq.current) setSearchHits([]);
                 }
             })();
         }, 280);
@@ -242,18 +246,18 @@ export function ViewContainer() {
                 >
                     {viewMode === "list" && <ListView node={filteredNode} searchMode={!!trimmedQuery} />}
                     {viewMode === "pie" && (
-                        <ViewChartErrorBoundary label="Pie chart">
-                            <PieChartView node={chartNode} />
+                        <ViewChartErrorBoundary label="Pie chart"><Suspense fallback={null}>
+                            <PieChartView node={chartNode} /></Suspense>
                         </ViewChartErrorBoundary>
                     )}
                     {viewMode === "bar" && (
-                        <ViewChartErrorBoundary label="Bar chart">
-                            <BarChartView node={chartNode} />
+                        <ViewChartErrorBoundary label="Bar chart"><Suspense fallback={null}>
+                            <BarChartView node={chartNode} /></Suspense>
                         </ViewChartErrorBoundary>
                     )}
                     {viewMode === "treemap" && (
-                        <ViewChartErrorBoundary label="Treemap">
-                            <TreemapView node={chartNode} />
+                        <ViewChartErrorBoundary label="Treemap"><Suspense fallback={null}>
+                            <TreemapView node={chartNode} /></Suspense>
                         </ViewChartErrorBoundary>
                     )}
                     {viewMode === "sunburst" && (

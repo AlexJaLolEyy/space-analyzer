@@ -1,8 +1,9 @@
 use crate::errors::AppError;
 use crate::models::flat_scan::ScanArena;
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 
-pub struct ScanSession(RwLock<Option<ScanArena>>);
+#[derive(Clone)]
+pub struct ScanSession(Arc<RwLock<Option<ScanArena>>>);
 
 impl Default for ScanSession {
     fn default() -> Self {
@@ -12,7 +13,7 @@ impl Default for ScanSession {
 
 impl ScanSession {
     pub fn new() -> Self {
-        Self(RwLock::new(None))
+        Self(Arc::new(RwLock::new(None)))
     }
 
     pub fn replace(&self, arena: ScanArena) {
@@ -40,5 +41,29 @@ impl ScanSession {
             .as_mut()
             .ok_or_else(|| AppError::validation("No scan loaded"))?;
         f(arena).map_err(Into::into)
+    }
+
+    /// Runs `f` on the blocking pool with a shared lock, so commands never block the main thread.
+    pub async fn read<R, F>(&self, f: F) -> Result<R, AppError>
+    where
+        R: Send + 'static,
+        F: FnOnce(&ScanArena) -> Result<R, String> + Send + 'static,
+    {
+        let s = self.clone();
+        tauri::async_runtime::spawn_blocking(move || s.with_arena(f))
+            .await
+            .map_err(|e| AppError::Internal { message: e.to_string() })?
+    }
+
+    /// Like [`read`](Self::read) but with an exclusive lock.
+    pub async fn write<R, F>(&self, f: F) -> Result<R, AppError>
+    where
+        R: Send + 'static,
+        F: FnOnce(&mut ScanArena) -> Result<R, String> + Send + 'static,
+    {
+        let s = self.clone();
+        tauri::async_runtime::spawn_blocking(move || s.with_arena_mut(f))
+            .await
+            .map_err(|e| AppError::Internal { message: e.to_string() })?
     }
 }
