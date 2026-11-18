@@ -8,7 +8,6 @@ use crate::utils::categorizer::categorize_file;
 use std::collections::HashMap;
 use rayon::prelude::*;
 use serde::Serialize;
-use std::io::{BufWriter, Write};
 use tauri::command;
 use tauri::State;
 
@@ -445,67 +444,6 @@ pub async fn get_cleanup_candidates(session: State<'_, ScanSession>) -> Result<C
     }).await
 }
 
-fn csv_escape(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
-}
-
-fn write_csv_node<W: Write>(a: &ScanArena, w: &mut W, id: u32, path: &str) -> std::io::Result<()> {
-    writeln!(
-        w,
-        "{},{},{},{},{},{},{}",
-        csv_escape(&a.display_name(id)),
-        csv_escape(path),
-        a.size(id),
-        if a.is_dir(id) { "dir" } else { "file" },
-        a.category(id).name(),
-        a.file_count(id),
-        a.mtime(id).map(|m| m.to_string()).unwrap_or_default()
-    )?;
-    if a.is_dir(id) {
-        for c in a.live_children(id) {
-            let mut p = path.to_string();
-            if !p.ends_with('\\') {
-                p.push('\\');
-            }
-            p.push_str(a.name(c));
-            write_csv_node(a, w, c, &p)?;
-        }
-    }
-    Ok(())
-}
-
-fn write_json_node<W: Write>(a: &ScanArena, w: &mut W, id: u32, path: &str) -> std::io::Result<()> {
-    let js = |s: &str| serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string());
-    write!(
-        w,
-        "{{\"name\":{},\"path\":{},\"size\":{},\"is_dir\":{},\"file_count\":{},\"category\":\"{}\",\"last_modified\":{},\"protected\":{},\"children\":[",
-        js(&a.display_name(id)),
-        js(path),
-        a.size(id),
-        a.is_dir(id),
-        a.file_count(id),
-        a.category(id).name(),
-        a.mtime(id).map(|m| m.to_string()).unwrap_or_else(|| "null".to_string()),
-        a.is_protected(id)
-    )?;
-    if a.is_dir(id) {
-        let mut first = true;
-        for c in a.live_children(id) {
-            if !first {
-                write!(w, ",")?;
-            }
-            first = false;
-            let mut p = path.to_string();
-            if !p.ends_with('\\') {
-                p.push('\\');
-            }
-            p.push_str(a.name(c));
-            write_json_node(a, w, c, &p)?;
-        }
-    }
-    write!(w, "]}}")
-}
-
 /// Streams the subtree at `path` straight to `dest` (format: "json" or "csv").
 #[command]
 pub async fn export_scan(
@@ -516,17 +454,6 @@ pub async fn export_scan(
 ) -> Result<u64, AppError> {
     session.read(move |a| {
         let id = a.resolve_path(&path)?;
-        let file = std::fs::File::create(&dest).map_err(|e| e.to_string())?;
-        let mut w = BufWriter::with_capacity(1 << 20, file);
-        let full = a.full_path(id);
-        let res = match format.as_str() {
-            "csv" => {
-                writeln!(w, "Name,Path,Size,Type,Category,FileCount,LastModified")
-                    .and_then(|_| write_csv_node(a, &mut w, id, &full))
-            }
-            _ => write_json_node(a, &mut w, id, &full),
-        };
-        res.and_then(|_| w.flush()).map_err(|e| e.to_string())?;
-        Ok(a.file_count(id))
+        crate::export::write_file(a, id, std::path::Path::new(&dest), &format).map_err(|e| e.to_string())
     }).await
 }

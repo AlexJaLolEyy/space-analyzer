@@ -23,6 +23,10 @@ path = "src/main.rs"
 name = "scan_bench"
 path = "src/bin/scan_bench.rs"
 
+[[bin]]
+name = "space-analyzer-cli"
+path = "src/bin/space-analyzer-cli.rs"
+
 [build-dependencies]
 tauri-build = { version = "2.5", features = [] }
 
@@ -32,7 +36,7 @@ tauri-plugin-opener = "2.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sysinfo = "0.38.2"
-windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.52", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_IO", "Win32_Security", "Win32_System_Threading", "Win32_System_ProcessStatus", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry"] }
 trash = "5"
 flate2 = "1"
 uuid = { version = "1", features = ["v4"] }
@@ -43,6 +47,8 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 rayon = "1.11.0"
 memchr = "2"
 thiserror = "2"
+notify = "8"
+tauri-plugin-single-instance = "2"
 
 [profile.release]
 opt-level = 3

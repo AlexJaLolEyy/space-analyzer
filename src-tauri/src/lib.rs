@@ -1,5 +1,7 @@
 pub mod commands;
 pub mod errors;
+pub mod export;
+pub mod headless;
 pub mod models;
 pub mod scan;
 pub mod scan_session;
@@ -18,6 +20,12 @@ pub struct AppState {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // --snapshot <path> runs without a window (scheduled snapshots)
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if let headless::Launch::Snapshot { path, excluded } = headless::parse_launch(&args) {
+        std::process::exit(headless::run_snapshot(&path, &excluded));
+    }
+
     println!("Space Analyzer Booting...");
 
     if crate::utils::is_admin() {
